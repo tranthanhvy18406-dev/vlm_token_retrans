@@ -13,6 +13,7 @@ from src.utils import get_torch_dtype, load_yaml, set_seed
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
+    parser.add_argument("--skip_debug_checks", action="store_true")
     args = parser.parse_args()
 
     cfg = load_yaml(args.config)
@@ -35,6 +36,9 @@ def main():
     sample = samples[0]
 
     prepared = wrapper.prepare_inputs(sample.image, sample.question, sample.answer)
+    if not args.skip_debug_checks:
+        wrapper.debug_prepared_input(prepared)
+        wrapper.debug_compare_native_and_manual(prepared)
 
     corrupted, damaged_mask, _ = corrupt_image_features(
         prepared.image_features,

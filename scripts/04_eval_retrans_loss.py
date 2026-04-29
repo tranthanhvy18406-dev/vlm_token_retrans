@@ -15,6 +15,9 @@ from src.scorer import MLPRetransScorer
 from src.utils import get_torch_dtype, load_yaml, make_2d_positions, mean_or_nan, set_seed
 
 
+METHOD_NAMES = ["full", "no", "random", "hidden_norm", "mlp", "oracle"]
+
+
 def restore_by_indices(corrupted, full, indices):
     restored = corrupted.clone()
     restored[:, indices, :] = full[:, indices, :]
@@ -83,6 +86,39 @@ def rank_oracle(wrapper, prepared, corrupted, full, candidates, chunk_size=16):
     return all_cands[order]
 
 
+def make_stats(budgets):
+    return {k: {name: [] for name in METHOD_NAMES} for k in budgets}
+
+
+def append_losses(stats, k, loss_full, loss_no, losses):
+    stats[k]["full"].append(float(loss_full.item()))
+    stats[k]["no"].append(float(loss_no.item()))
+    for name, value in losses.items():
+        stats[k][name].append(float(value.item()))
+
+
+def print_stats_block(title, stats, budgets):
+    sample_count = len(stats[budgets[0]]["full"]) if budgets else 0
+    print(f"\n===== {title} (n={sample_count}), lower loss is better =====")
+    if sample_count == 0:
+        print("No samples.")
+        return
+
+    for k in budgets:
+        print(f"\nK={k}")
+        full_mean = mean_or_nan(stats[k]["full"])
+        no_mean = mean_or_nan(stats[k]["no"])
+        for name, values in stats[k].items():
+            if values:
+                mean_val = mean_or_nan(values)
+                print(f"{name:12s}: {mean_val:.6f}")
+        print("Recovery ratios:")
+        for name in ["random", "hidden_norm", "mlp", "oracle"]:
+            method_mean = mean_or_nan(stats[k][name])
+            recovery = recovery_ratio(no_mean, method_mean, full_mean)
+            print(f"{name:12s}: {100.0 * recovery:.2f}%")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
@@ -125,19 +161,11 @@ def main():
     budgets = cfg["eval"]["budgets"]
     layer_idx = cfg["model"]["layer_idx"]
 
-    stats = {
-        k: {
-            "full": [],
-            "no": [],
-            "random": [],
-            "hidden_norm": [],
-            "mlp": [],
-            "oracle": [],
-        }
-        for k in budgets
-    }
+    stats_all = make_stats(budgets)
+    stats_vs = make_stats(budgets)
+    stats_other = make_stats(budgets)
 
-    for sample in tqdm(samples, desc="eval retrans loss"):
+    for sample_idx, sample in enumerate(tqdm(samples, desc="eval retrans loss")):
         try:
             prepared = wrapper.prepare_inputs(sample.image, sample.question, sample.answer)
             full = prepared.image_features
@@ -165,6 +193,13 @@ def main():
 
             loss_full = wrapper.compute_loss_from_image_features(prepared, full)
             loss_no = wrapper.compute_loss_from_image_features(prepared, corrupted)
+            is_vision_sensitive = float(loss_full.item()) < float(loss_no.item())
+            print(
+                f"sample={sample_idx} "
+                f"full={loss_full.item():.4f}, "
+                f"no={loss_no.item():.4f}, "
+                f"vision_sensitive={is_vision_sensitive}"
+            )
             oracle_ranked = rank_oracle(
                 wrapper=wrapper,
                 prepared=prepared,
@@ -207,29 +242,19 @@ def main():
                     ),
                 }
 
-                stats[k]["full"].append(float(loss_full.item()))
-                stats[k]["no"].append(float(loss_no.item()))
-                for name, value in losses.items():
-                    stats[k][name].append(float(value.item()))
+                append_losses(stats_all, k, loss_full, loss_no, losses)
+                if is_vision_sensitive:
+                    append_losses(stats_vs, k, loss_full, loss_no, losses)
+                else:
+                    append_losses(stats_other, k, loss_full, loss_no, losses)
 
         except Exception as exc:
             print(f"[WARN] eval sample failed: {exc}")
             continue
 
-    print("\n===== Eval results, lower loss is better =====")
-    for k in budgets:
-        print(f"\nK={k}")
-        full_mean = mean_or_nan(stats[k]["full"])
-        no_mean = mean_or_nan(stats[k]["no"])
-        for name, values in stats[k].items():
-            if values:
-                mean_val = mean_or_nan(values)
-                print(f"{name:12s}: {mean_val:.6f}")
-        print("Recovery ratios:")
-        for name in ["random", "hidden_norm", "mlp", "oracle"]:
-            method_mean = mean_or_nan(stats[k][name])
-            recovery = recovery_ratio(no_mean, method_mean, full_mean)
-            print(f"{name:12s}: {100.0 * recovery:.2f}%")
+    print_stats_block("All samples", stats_all, budgets)
+    print_stats_block("Vision-sensitive samples: full_loss < no_loss", stats_vs, budgets)
+    print_stats_block("Other samples: full_loss >= no_loss", stats_other, budgets)
 
 
 if __name__ == "__main__":

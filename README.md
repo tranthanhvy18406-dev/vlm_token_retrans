@@ -26,6 +26,10 @@ python scripts/03_train_mlp_scorer.py --config configs/stage1_mlp.yaml
 python scripts/04_eval_retrans_loss.py --config configs/stage1_mlp.yaml --checkpoint outputs/checkpoints/mlp_scorer.pt --max_samples 50
 ```
 
+`01_smoke_test_llava.py` runs label-mask, image-replacement, and native-vs-manual
+LLaVA forward checks by default. Use `--skip_debug_checks` only when you want the
+old minimal smoke test.
+
 For Slurm:
 
 ```bash

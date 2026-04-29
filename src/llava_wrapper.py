@@ -13,8 +13,10 @@ class PreparedInput:
     input_ids: torch.Tensor
     attention_mask: torch.Tensor
     labels: torch.Tensor
+    prompt_ids: torch.Tensor
     image_positions: torch.Tensor
     image_features: torch.Tensor
+    pixel_values: torch.Tensor
     inputs_embeds_full: torch.Tensor
 
 
@@ -168,6 +170,7 @@ class LlavaRetransWrapper:
             full_text,
             num_image_tokens,
         )
+        prompt_ids = prompt_ids.to(self.input_device)
         input_ids = input_ids.to(self.input_device)
         attention_mask = attention_mask.to(self.input_device)
 
@@ -195,8 +198,10 @@ class LlavaRetransWrapper:
             input_ids=input_ids,
             attention_mask=attention_mask,
             labels=labels,
+            prompt_ids=prompt_ids,
             image_positions=image_positions,
             image_features=image_features,
+            pixel_values=pixel_values,
             inputs_embeds_full=inputs_embeds_full,
         )
 
@@ -226,6 +231,78 @@ class LlavaRetransWrapper:
         embeds = prepared.inputs_embeds_full.clone()
         embeds[:, prepared.image_positions, :] = image_features[0]
         return embeds
+
+    @torch.no_grad()
+    def debug_prepared_input(self, prepared: PreparedInput) -> dict[str, float | bool | str]:
+        """
+        Print and return label-mask / image-replacement sanity checks.
+        Intended for smoke tests, not the training path.
+        """
+        prompt_ids = prepared.prompt_ids[0].to(prepared.input_ids.device)
+        full_prefix = prepared.input_ids[0, : prompt_ids.numel()]
+        prefix_equal = torch.equal(prompt_ids, full_prefix)
+
+        print("prefix equal:", prefix_equal)
+        if not prefix_equal:
+            print("prompt decoded:")
+            print(self.processor.tokenizer.decode(prompt_ids.detach().cpu()))
+            print("full prefix decoded:")
+            print(self.processor.tokenizer.decode(full_prefix.detach().cpu()))
+
+        valid_label_pos = (prepared.labels[0] != -100).nonzero(as_tuple=False).squeeze(-1)
+        first_valid_pos = int(valid_label_pos[0].item())
+        first_ids = prepared.labels[0, valid_label_pos[:10]]
+        first_supervised = self.processor.tokenizer.decode(first_ids.detach().cpu())
+
+        print("first valid label position:", first_valid_pos)
+        print("first supervised tokens:")
+        print(first_supervised)
+
+        embeds = self.make_embeds_with_image_features(prepared, prepared.image_features)
+        replacement_diff = (
+            embeds[0, prepared.image_positions, :] - prepared.image_features[0]
+        ).abs().max()
+        replacement_diff_value = float(replacement_diff.item())
+        print("image replacement max diff:", replacement_diff_value)
+
+        return {
+            "prefix_equal": prefix_equal,
+            "first_valid_label_position": first_valid_pos,
+            "first_supervised_tokens": first_supervised,
+            "image_replacement_max_diff": replacement_diff_value,
+        }
+
+    @torch.no_grad()
+    def debug_compare_native_and_manual(self, prepared: PreparedInput) -> dict[str, float]:
+        """
+        Compare the manual inputs_embeds path against the native pixel_values path.
+        A large diff means the manual visual-token replacement path is not equivalent.
+        """
+        manual_loss = self.compute_loss_from_image_features(prepared, prepared.image_features)
+        native_outputs = self.model(
+            input_ids=prepared.input_ids,
+            pixel_values=prepared.pixel_values,
+            attention_mask=prepared.attention_mask.to(prepared.input_ids.device),
+            labels=prepared.labels.to(prepared.input_ids.device),
+            use_cache=False,
+            return_dict=True,
+        )
+
+        native_loss = getattr(native_outputs, "loss", None)
+        if native_loss is None:
+            native_loss = self._loss_from_logits(native_outputs.logits, prepared.labels)[0]
+        native_loss = native_loss.detach()
+        abs_diff = abs(float(manual_loss.item()) - float(native_loss.item()))
+
+        print("manual full loss:", float(manual_loss.item()))
+        print("native full loss:", float(native_loss.item()))
+        print("abs diff:", abs_diff)
+
+        return {
+            "manual_full_loss": float(manual_loss.item()),
+            "native_full_loss": float(native_loss.item()),
+            "abs_diff": abs_diff,
+        }
 
     @torch.no_grad()
     def compute_loss_from_image_features(
