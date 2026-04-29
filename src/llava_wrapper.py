@@ -335,6 +335,82 @@ class LlavaRetransWrapper:
         valid = shift_labels.ne(-100)
         return loss_per_token.sum(dim=1) / valid.sum(dim=1).clamp_min(1)
 
+    def _answer_shift_logits(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        labels = labels.to(logits.device)
+        valid = labels[0, 1:].ne(-100)
+        if valid.sum().item() == 0:
+            raise RuntimeError("No answer-token positions available for teacher KL.")
+        return logits[:, :-1, :][:, valid, :].contiguous()
+
+    def _teacher_kl_from_logits(
+        self,
+        logits: torch.Tensor,
+        labels: torch.Tensor,
+        teacher_log_probs: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        D_KL(p_clean || p_current) averaged over supervised answer-token positions.
+        teacher_log_probs: [T, vocab], from the clean/full-image forward pass.
+        """
+        answer_logits = self._answer_shift_logits(logits, labels).float()
+        current_log_probs = torch.log_softmax(answer_logits, dim=-1)
+        teacher_log_probs = teacher_log_probs.to(
+            device=current_log_probs.device,
+            dtype=torch.float32,
+        )
+        if teacher_log_probs.shape != current_log_probs.shape[1:]:
+            raise RuntimeError(
+                "Teacher distribution shape mismatch: "
+                f"teacher={tuple(teacher_log_probs.shape)}, "
+                f"current={tuple(current_log_probs.shape[1:])}"
+            )
+
+        teacher_probs = teacher_log_probs.exp()
+        kl_per_token = (teacher_probs.unsqueeze(0) * (
+            teacher_log_probs.unsqueeze(0) - current_log_probs
+        )).sum(dim=-1)
+        return kl_per_token.mean(dim=1)
+
+    @torch.no_grad()
+    def compute_teacher_log_probs_from_image_features(
+        self,
+        prepared: PreparedInput,
+        image_features: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Return clean teacher next-token log-probabilities at answer-token positions.
+        shape: [num_answer_tokens, vocab]
+        """
+        embeds = self.make_embeds_with_image_features(prepared, image_features)
+        outputs = self.model(
+            inputs_embeds=embeds,
+            attention_mask=prepared.attention_mask.to(embeds.device),
+            use_cache=False,
+            return_dict=True,
+        )
+        answer_logits = self._answer_shift_logits(outputs.logits, prepared.labels)
+        return torch.log_softmax(answer_logits[0].float(), dim=-1).detach()
+
+    @torch.no_grad()
+    def compute_teacher_kl_from_image_features(
+        self,
+        prepared: PreparedInput,
+        teacher_log_probs: torch.Tensor,
+        image_features: torch.Tensor,
+    ) -> torch.Tensor:
+        embeds = self.make_embeds_with_image_features(prepared, image_features)
+        outputs = self.model(
+            inputs_embeds=embeds,
+            attention_mask=prepared.attention_mask.to(embeds.device),
+            use_cache=False,
+            return_dict=True,
+        )
+        return self._teacher_kl_from_logits(
+            outputs.logits,
+            prepared.labels,
+            teacher_log_probs,
+        ).detach()[0]
+
     @torch.no_grad()
     def compute_loss_batch_from_embeds(
         self,
@@ -355,6 +431,30 @@ class LlavaRetransWrapper:
         )
 
         return self._loss_from_logits(outputs.logits, labels).detach()
+
+    @torch.no_grad()
+    def compute_teacher_kl_batch_from_embeds(
+        self,
+        embeds: torch.Tensor,
+        attention_mask: torch.Tensor,
+        labels: torch.Tensor,
+        teacher_log_probs: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        embeds: [B, S, D]
+        Returns per-sample D_KL(p_clean || p_current), averaged over answer tokens.
+        """
+        outputs = self.model(
+            inputs_embeds=embeds,
+            attention_mask=attention_mask.to(embeds.device),
+            use_cache=False,
+            return_dict=True,
+        )
+        return self._teacher_kl_from_logits(
+            outputs.logits,
+            labels,
+            teacher_log_probs,
+        ).detach()
 
     @torch.no_grad()
     def get_layer_visual_hidden(

@@ -49,5 +49,5 @@ fi
 
 python -u scripts/04_eval_retrans_loss.py \
   --config configs/stage1_mlp.yaml \
-  --checkpoint outputs/checkpoints/mlp_scorer.pt \
+  --checkpoint outputs/checkpoints/mlp_scorer_teacher.pt \
   --max_samples "$EVAL_SAMPLES"

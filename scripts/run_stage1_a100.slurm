@@ -42,4 +42,4 @@ python -u scripts/05_download_model.py --config configs/stage1_mlp.yaml
 python -u scripts/01_smoke_test_llava.py --config configs/stage1_mlp.yaml
 python -u scripts/02_build_oracle_cache.py --config configs/stage1_mlp.yaml --split train --max_samples "$MAX_SAMPLES"
 python -u scripts/03_train_mlp_scorer.py --config configs/stage1_mlp.yaml
-python -u scripts/04_eval_retrans_loss.py --config configs/stage1_mlp.yaml --checkpoint outputs/checkpoints/mlp_scorer.pt --max_samples "$MAX_SAMPLES"
+python -u scripts/04_eval_retrans_loss.py --config configs/stage1_mlp.yaml --checkpoint outputs/checkpoints/mlp_scorer_teacher.pt --max_samples "$MAX_SAMPLES"

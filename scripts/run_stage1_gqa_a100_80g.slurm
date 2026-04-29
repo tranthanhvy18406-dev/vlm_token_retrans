@@ -66,5 +66,5 @@ python -u scripts/03_train_mlp_scorer.py \
 
 python -u scripts/04_eval_retrans_loss.py \
   --config configs/stage1_mlp_gqa.yaml \
-  --checkpoint outputs/checkpoints/mlp_scorer_gqa.pt \
+  --checkpoint outputs/checkpoints/mlp_scorer_gqa_teacher.pt \
   --max_samples "$EVAL_SAMPLES"

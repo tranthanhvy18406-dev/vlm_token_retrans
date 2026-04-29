@@ -13,6 +13,15 @@ from src.llava_wrapper import LlavaRetransWrapper
 from src.utils import ensure_dir, get_torch_dtype, load_yaml, make_2d_positions, set_seed
 
 
+def normalize_oracle_target(target: str) -> str:
+    target = target.lower()
+    if target in {"ce", "gt_ce", "ground_truth_ce"}:
+        return "gt_ce"
+    if target in {"teacher_kl", "clean_teacher_kl", "consistency_kl"}:
+        return "teacher_kl"
+    raise ValueError(f"Unsupported oracle target: {target}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
@@ -44,7 +53,9 @@ def main():
 
     max_candidates = cfg["oracle"]["max_candidates_per_sample"]
     chunk_size = cfg["oracle"]["candidate_chunk_size"]
+    oracle_target = normalize_oracle_target(cfg["oracle"].get("target", "gt_ce"))
     layer_idx = cfg["model"]["layer_idx"]
+    print(f"oracle target: {oracle_target}")
 
     for sample_idx, sample in enumerate(tqdm(samples, desc="building oracle cache")):
         out_path = os.path.join(save_dir, f"{sample_idx:06d}.pt")
@@ -62,7 +73,21 @@ def main():
                 mask_value=cfg["corruption"]["mask_value"],
             )
 
-            base_loss = wrapper.compute_loss_from_image_features(prepared, corrupted_features)
+            teacher_log_probs = None
+            if oracle_target == "gt_ce":
+                base_metric = wrapper.compute_loss_from_image_features(prepared, corrupted_features)
+                base_metric_name = "gt_ce"
+            else:
+                teacher_log_probs = wrapper.compute_teacher_log_probs_from_image_features(
+                    prepared,
+                    full_features,
+                )
+                base_metric = wrapper.compute_teacher_kl_from_image_features(
+                    prepared=prepared,
+                    teacher_log_probs=teacher_log_probs,
+                    image_features=corrupted_features,
+                )
+                base_metric_name = "teacher_kl"
 
             visual_hidden = wrapper.get_layer_visual_hidden(
                 prepared=prepared,
@@ -91,13 +116,21 @@ def main():
                     candidate_indices=cand,
                 )
 
-                losses = wrapper.compute_loss_batch_from_embeds(
-                    embeds=embeds,
-                    attention_mask=prepared.attention_mask.repeat(count, 1),
-                    labels=prepared.labels.repeat(count, 1),
-                )
+                if oracle_target == "gt_ce":
+                    candidate_metrics = wrapper.compute_loss_batch_from_embeds(
+                        embeds=embeds,
+                        attention_mask=prepared.attention_mask.repeat(count, 1),
+                        labels=prepared.labels.repeat(count, 1),
+                    )
+                else:
+                    candidate_metrics = wrapper.compute_teacher_kl_batch_from_embeds(
+                        embeds=embeds,
+                        attention_mask=prepared.attention_mask.repeat(count, 1),
+                        labels=prepared.labels.repeat(count, 1),
+                        teacher_log_probs=teacher_log_probs,
+                    )
 
-                gains = (base_loss - losses).to(dtype=oracle_gain.dtype)
+                gains = (base_metric - candidate_metrics).to(dtype=oracle_gain.dtype)
                 oracle_gain[cand] = gains
 
             pos = make_2d_positions(num_tokens, device=full_features.device)
@@ -110,13 +143,15 @@ def main():
                 "answer": sample.answer,
                 "layer_idx": layer_idx,
                 "drop_ratio": cfg["corruption"]["drop_ratio"],
+                "oracle_target": oracle_target,
+                "base_metric_name": base_metric_name,
                 "hidden": visual_hidden.detach().cpu().to(torch.float16),
                 "damaged_mask": damaged_mask.detach().cpu(),
                 "reliability": reliability.detach().cpu().to(torch.float16),
                 "damaged_float": damaged_float.detach().cpu().to(torch.float16),
                 "pos": pos.detach().cpu().to(torch.float16),
                 "oracle_gain": oracle_gain.detach().cpu().to(torch.float32),
-                "base_loss": float(base_loss.item()),
+                "base_metric": float(base_metric.item()),
             }
 
             torch.save(cache, out_path)

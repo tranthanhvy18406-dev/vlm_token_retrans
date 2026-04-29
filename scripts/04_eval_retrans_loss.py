@@ -18,6 +18,15 @@ from src.utils import get_torch_dtype, load_yaml, make_2d_positions, mean_or_nan
 METHOD_NAMES = ["full", "no", "random", "hidden_norm", "mlp", "oracle"]
 
 
+def normalize_metric_name(name: str) -> str:
+    name = name.lower()
+    if name in {"ce", "gt_ce", "ground_truth_ce"}:
+        return "gt_ce"
+    if name in {"teacher_kl", "clean_teacher_kl", "consistency_kl"}:
+        return "teacher_kl"
+    raise ValueError(f"Unsupported eval/oracle metric: {name}")
+
+
 def restore_by_indices(corrupted, full, indices):
     restored = corrupted.clone()
     restored[:, indices, :] = full[:, indices, :]
@@ -52,8 +61,63 @@ def choose_mlp(scorer, hidden, pos, reliability, damaged_float, candidates, k):
     return candidates[torch.topk(scores, k=k).indices]
 
 
-def rank_oracle(wrapper, prepared, corrupted, full, candidates, chunk_size=16):
-    base_loss = wrapper.compute_loss_from_image_features(prepared, corrupted)
+def compute_metric_from_image_features(
+    wrapper,
+    prepared,
+    image_features,
+    metric_name,
+    teacher_log_probs=None,
+):
+    if metric_name == "gt_ce":
+        return wrapper.compute_loss_from_image_features(prepared, image_features)
+    return wrapper.compute_teacher_kl_from_image_features(
+        prepared=prepared,
+        teacher_log_probs=teacher_log_probs,
+        image_features=image_features,
+    )
+
+
+def compute_metric_batch_from_embeds(
+    wrapper,
+    prepared,
+    embeds,
+    count,
+    metric_name,
+    teacher_log_probs=None,
+):
+    attention_mask = prepared.attention_mask.repeat(count, 1)
+    labels = prepared.labels.repeat(count, 1)
+    if metric_name == "gt_ce":
+        return wrapper.compute_loss_batch_from_embeds(
+            embeds=embeds,
+            attention_mask=attention_mask,
+            labels=labels,
+        )
+    return wrapper.compute_teacher_kl_batch_from_embeds(
+        embeds=embeds,
+        attention_mask=attention_mask,
+        labels=labels,
+        teacher_log_probs=teacher_log_probs,
+    )
+
+
+def rank_oracle(
+    wrapper,
+    prepared,
+    corrupted,
+    full,
+    candidates,
+    metric_name,
+    teacher_log_probs=None,
+    chunk_size=16,
+):
+    base_metric = compute_metric_from_image_features(
+        wrapper=wrapper,
+        prepared=prepared,
+        image_features=corrupted,
+        metric_name=metric_name,
+        teacher_log_probs=teacher_log_probs,
+    )
 
     gains = []
     all_cands = []
@@ -71,13 +135,16 @@ def rank_oracle(wrapper, prepared, corrupted, full, candidates, chunk_size=16):
             candidate_indices=cand,
         )
 
-        losses = wrapper.compute_loss_batch_from_embeds(
+        candidate_metrics = compute_metric_batch_from_embeds(
+            wrapper=wrapper,
+            prepared=prepared,
             embeds=embeds,
-            attention_mask=prepared.attention_mask.repeat(count, 1),
-            labels=prepared.labels.repeat(count, 1),
+            count=count,
+            metric_name=metric_name,
+            teacher_log_probs=teacher_log_probs,
         )
 
-        gains.append(base_loss - losses)
+        gains.append(base_metric - candidate_metrics)
         all_cands.append(cand)
 
     gains = torch.cat(gains, dim=0)
@@ -97,9 +164,10 @@ def append_losses(stats, k, loss_full, loss_no, losses):
         stats[k][name].append(float(value.item()))
 
 
-def print_stats_block(title, stats, budgets):
+def print_stats_block(title, stats, budgets, metric_name):
     sample_count = len(stats[budgets[0]]["full"]) if budgets else 0
-    print(f"\n===== {title} (n={sample_count}), lower loss is better =====")
+    metric_label = "teacher KL" if metric_name == "teacher_kl" else "GT CE loss"
+    print(f"\n===== {title} (n={sample_count}), lower {metric_label} is better =====")
     if sample_count == 0:
         print("No samples.")
         return
@@ -159,7 +227,11 @@ def main():
     )
 
     budgets = cfg["eval"]["budgets"]
+    eval_metric = normalize_metric_name(
+        cfg.get("eval", {}).get("metric", cfg["oracle"].get("target", "gt_ce"))
+    )
     layer_idx = cfg["model"]["layer_idx"]
+    print(f"eval metric: {eval_metric}")
 
     stats_all = make_stats(budgets)
     stats_vs = make_stats(budgets)
@@ -191,13 +263,33 @@ def main():
             pos = make_2d_positions(num_tokens, device=device)
             damaged_float = damaged_mask.float().unsqueeze(-1)
 
-            loss_full = wrapper.compute_loss_from_image_features(prepared, full)
-            loss_no = wrapper.compute_loss_from_image_features(prepared, corrupted)
+            teacher_log_probs = None
+            if eval_metric == "teacher_kl":
+                teacher_log_probs = wrapper.compute_teacher_log_probs_from_image_features(
+                    prepared,
+                    full,
+                )
+
+            loss_full = compute_metric_from_image_features(
+                wrapper=wrapper,
+                prepared=prepared,
+                image_features=full,
+                metric_name=eval_metric,
+                teacher_log_probs=teacher_log_probs,
+            )
+            loss_no = compute_metric_from_image_features(
+                wrapper=wrapper,
+                prepared=prepared,
+                image_features=corrupted,
+                metric_name=eval_metric,
+                teacher_log_probs=teacher_log_probs,
+            )
             is_vision_sensitive = float(loss_full.item()) < float(loss_no.item())
             print(
                 f"sample={sample_idx} "
-                f"full={loss_full.item():.4f}, "
-                f"no={loss_no.item():.4f}, "
+                f"metric={eval_metric}, "
+                f"full={loss_full.item():.6f}, "
+                f"no={loss_no.item():.6f}, "
                 f"vision_sensitive={is_vision_sensitive}"
             )
             oracle_ranked = rank_oracle(
@@ -206,6 +298,8 @@ def main():
                 corrupted=corrupted,
                 full=full,
                 candidates=candidates,
+                metric_name=eval_metric,
+                teacher_log_probs=teacher_log_probs,
                 chunk_size=cfg["oracle"]["candidate_chunk_size"],
             )
 
@@ -224,21 +318,33 @@ def main():
                 idx_oracle = oracle_ranked[: min(k, oracle_ranked.numel())]
 
                 losses = {
-                    "random": wrapper.compute_loss_from_image_features(
+                    "random": compute_metric_from_image_features(
+                        wrapper,
                         prepared,
                         restore_by_indices(corrupted, full, idx_random),
+                        eval_metric,
+                        teacher_log_probs,
                     ),
-                    "hidden_norm": wrapper.compute_loss_from_image_features(
+                    "hidden_norm": compute_metric_from_image_features(
+                        wrapper,
                         prepared,
                         restore_by_indices(corrupted, full, idx_hidden),
+                        eval_metric,
+                        teacher_log_probs,
                     ),
-                    "mlp": wrapper.compute_loss_from_image_features(
+                    "mlp": compute_metric_from_image_features(
+                        wrapper,
                         prepared,
                         restore_by_indices(corrupted, full, idx_mlp),
+                        eval_metric,
+                        teacher_log_probs,
                     ),
-                    "oracle": wrapper.compute_loss_from_image_features(
+                    "oracle": compute_metric_from_image_features(
+                        wrapper,
                         prepared,
                         restore_by_indices(corrupted, full, idx_oracle),
+                        eval_metric,
+                        teacher_log_probs,
                     ),
                 }
 
@@ -252,9 +358,9 @@ def main():
             print(f"[WARN] eval sample failed: {exc}")
             continue
 
-    print_stats_block("All samples", stats_all, budgets)
-    print_stats_block("Vision-sensitive samples: full_loss < no_loss", stats_vs, budgets)
-    print_stats_block("Other samples: full_loss >= no_loss", stats_other, budgets)
+    print_stats_block("All samples", stats_all, budgets, eval_metric)
+    print_stats_block("Vision-sensitive samples: full_metric < no_metric", stats_vs, budgets, eval_metric)
+    print_stats_block("Other samples: full_metric >= no_metric", stats_other, budgets, eval_metric)
 
 
 if __name__ == "__main__":
