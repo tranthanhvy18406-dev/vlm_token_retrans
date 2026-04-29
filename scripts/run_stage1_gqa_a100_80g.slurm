@@ -47,8 +47,8 @@ echo "EVAL_SAMPLES=${EVAL_SAMPLES}"
 
 python -u scripts/08_prepare_gqa_jsonl.py \
   --questions "$GQA_ROOT/questions1.2.zip" \
-  --image_zip "$GQA_ROOT/images.zip" \
-  --extract_images_dir data/gqa_images \
+  --image_dir data/gqa_images \
+  --download_missing_images_from_vg \
   --output data/gqa_gqa200.jsonl \
   --split val \
   --max_samples "$MAX_SAMPLES"
