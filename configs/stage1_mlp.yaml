@@ -1,0 +1,44 @@
+model:
+  name: /scratch/prj/nmes_simeone/xty_hf_models/llava-1.5-7b-hf-local
+  cache_dir: /scratch/prj/nmes_simeone/xty_hf_models
+  local_files_only: true
+  dtype: float16
+  device: cuda
+  device_map: auto
+  layer_idx: 12
+
+data:
+  train_jsonl: data/gqa_mini.jsonl
+  val_jsonl: data/gqa_mini.jsonl
+  image_root: ""
+  max_samples: 1000
+
+corruption:
+  mode: erasure
+  drop_ratio: 0.5
+  mask_value: zero
+  seed: 42
+
+oracle:
+  max_candidates_per_sample: 128
+  candidate_chunk_size: 16
+  save_dir: outputs/oracle_cache/train
+
+scorer:
+  hidden_dim: 4096
+  aux_dim: 4
+  hidden1: 1024
+  hidden2: 256
+  dropout: 0.1
+
+train:
+  epochs: 5
+  lr: 1.0e-4
+  weight_decay: 1.0e-4
+  pairs_per_sample: 2048
+  list_loss_weight: 0.2
+  grad_clip: 1.0
+  checkpoint_path: outputs/checkpoints/mlp_scorer.pt
+
+eval:
+  budgets: [16, 32, 64]
