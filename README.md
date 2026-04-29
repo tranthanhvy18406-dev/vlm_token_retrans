@@ -57,6 +57,12 @@ are about 20.3 GB.
 python scripts/07_download_gqa_assets.py --root /scratch/prj/nmes_simeone/datasets/gqa --questions --images
 ```
 
+Or as a CPU Slurm job:
+
+```bash
+sbatch --export=ALL,GQA_ROOT=/scratch/prj/nmes_simeone/datasets/gqa,DOWNLOAD_IMAGES=1 scripts/run_download_gqa_cpu.slurm
+```
+
 Then run the GQA stage-1 experiment. The preparation script filters to balanced
 questions, excludes yes/no answers by default, extracts only the selected images,
 and writes `data/gqa_gqa200.jsonl`.
