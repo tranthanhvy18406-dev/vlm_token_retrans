@@ -48,5 +48,22 @@ For real data already present in `data/gqa_mini.jsonl`, disable toy data regener
 sbatch --export=ALL,EVAL_SAMPLES=50,CREATE_TOY_DATA=0 scripts/run_eval_a100_80g.slurm
 ```
 
+## GQA Run
+
+Download the official GQA assets once. Questions are about 1.4 GB; raw image files
+are about 20.3 GB.
+
+```bash
+python scripts/07_download_gqa_assets.py --root /scratch/prj/nmes_simeone/datasets/gqa --questions --images
+```
+
+Then run the GQA stage-1 experiment. The preparation script filters to balanced
+questions, excludes yes/no answers by default, extracts only the selected images,
+and writes `data/gqa_gqa200.jsonl`.
+
+```bash
+sbatch --export=ALL,GQA_ROOT=/scratch/prj/nmes_simeone/datasets/gqa,MAX_SAMPLES=200,EVAL_SAMPLES=50 scripts/run_stage1_gqa_a100_80g.slurm
+```
+
 Generated toy images, oracle cache files, checkpoints, logs, model weights, and conda
 environments are intentionally ignored by git.

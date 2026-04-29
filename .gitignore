@@ -4,6 +4,8 @@ __pycache__/
 
 data/examples/
 data/gqa_mini.jsonl
+data/gqa_*.jsonl
+data/gqa_images/
 !data/.gitkeep
 
 outputs/oracle_cache/**/*.pt
