@@ -36,5 +36,17 @@ For Slurm:
 sbatch --export=ALL,MAX_SAMPLES=200,EVAL_SAMPLES=50 scripts/run_stage1_a100_80g.slurm
 ```
 
+To rerun only the grouped evaluation with an existing checkpoint:
+
+```bash
+sbatch --export=ALL,EVAL_SAMPLES=50 scripts/run_eval_a100_80g.slurm
+```
+
+For real data already present in `data/gqa_mini.jsonl`, disable toy data regeneration:
+
+```bash
+sbatch --export=ALL,EVAL_SAMPLES=50,CREATE_TOY_DATA=0 scripts/run_eval_a100_80g.slurm
+```
+
 Generated toy images, oracle cache files, checkpoints, logs, model weights, and conda
 environments are intentionally ignored by git.
