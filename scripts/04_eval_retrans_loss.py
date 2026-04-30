@@ -15,7 +15,23 @@ from src.scorer import MLPRetransScorer
 from src.utils import get_torch_dtype, load_yaml, make_2d_positions, mean_or_nan, set_seed
 
 
-METHOD_NAMES = ["full", "no", "random", "hidden_norm", "mlp", "oracle"]
+METHOD_NAMES = [
+    "full",
+    "no",
+    "random",
+    "hidden_norm",
+    "mlp",
+    "oracle_single",
+    "oracle_greedy",
+]
+
+RETRANSMISSION_METHODS = [
+    "random",
+    "hidden_norm",
+    "mlp",
+    "oracle_single",
+    "oracle_greedy",
+]
 
 
 def normalize_metric_name(name: str) -> str:
@@ -153,8 +169,88 @@ def rank_oracle(
     return all_cands[order]
 
 
+def choose_greedy_set_oracle(
+    wrapper,
+    prepared,
+    corrupted,
+    full,
+    candidate_pool,
+    budgets,
+    metric_name,
+    teacher_log_probs=None,
+    chunk_size=16,
+):
+    """
+    Cumulative greedy set oracle.
+
+    At step t, recompute marginal gain conditioned on already-restored tokens.
+    This is much more expensive than single-token oracle, so callers should
+    pass a capped candidate_pool and a small sample count.
+    """
+    max_budget = min(max(budgets), candidate_pool.numel())
+    selected = []
+    remaining = candidate_pool.clone()
+    current = corrupted.clone()
+    selected_by_budget = {}
+
+    for step in range(max_budget):
+        base_metric = compute_metric_from_image_features(
+            wrapper=wrapper,
+            prepared=prepared,
+            image_features=current,
+            metric_name=metric_name,
+            teacher_log_probs=teacher_log_probs,
+        )
+
+        gains = []
+        all_cands = []
+        for start in range(0, remaining.numel(), chunk_size):
+            cand = remaining[start : start + chunk_size]
+            count = cand.numel()
+            if count == 0:
+                continue
+
+            embeds = wrapper.build_candidate_restored_embeds(
+                prepared=prepared,
+                corrupted_features=current,
+                full_features=full,
+                candidate_indices=cand,
+            )
+            candidate_metrics = compute_metric_batch_from_embeds(
+                wrapper=wrapper,
+                prepared=prepared,
+                embeds=embeds,
+                count=count,
+                metric_name=metric_name,
+                teacher_log_probs=teacher_log_probs,
+            )
+            gains.append(base_metric - candidate_metrics)
+            all_cands.append(cand)
+
+        gains = torch.cat(gains, dim=0)
+        all_cands = torch.cat(all_cands, dim=0)
+        best_pos = int(torch.argmax(gains).item())
+        best_idx = all_cands[best_pos]
+        selected.append(best_idx)
+
+        current[:, best_idx, :] = full[:, best_idx, :]
+        remaining = remaining[remaining != best_idx]
+
+        budget = step + 1
+        if budget in budgets:
+            selected_by_budget[budget] = torch.stack(selected)
+
+    return selected_by_budget
+
+
 def make_stats(budgets):
-    return {k: {name: [] for name in METHOD_NAMES} for k in budgets}
+    stats = {}
+    for k in budgets:
+        stats[k] = {name: [] for name in METHOD_NAMES}
+        for name in RETRANSMISSION_METHODS:
+            stats[k][f"{name}__full"] = []
+            stats[k][f"{name}__no"] = []
+    return stats
 
 
 def append_losses(stats, k, loss_full, loss_no, losses):
@@ -162,6 +258,8 @@ def append_losses(stats, k, loss_full, loss_no, losses):
     stats[k]["no"].append(float(loss_no.item()))
     for name, value in losses.items():
         stats[k][name].append(float(value.item()))
+        stats[k][f"{name}__full"].append(float(loss_full.item()))
+        stats[k][f"{name}__no"].append(float(loss_no.item()))
 
 
 def print_stats_block(title, stats, budgets, metric_name):
@@ -176,22 +274,38 @@ def print_stats_block(title, stats, budgets, metric_name):
         print(f"\nK={k}")
         full_mean = mean_or_nan(stats[k]["full"])
         no_mean = mean_or_nan(stats[k]["no"])
-        for name, values in stats[k].items():
+        for name in METHOD_NAMES:
+            values = stats[k][name]
             if values:
                 mean_val = mean_or_nan(values)
-                print(f"{name:12s}: {mean_val:.6f}")
+                print(f"{name:14s}: {mean_val:.6f} (n={len(values)})")
         print("Recovery ratios:")
-        for name in ["random", "hidden_norm", "mlp", "oracle"]:
+        for name in RETRANSMISSION_METHODS:
+            if not stats[k][name]:
+                continue
             method_mean = mean_or_nan(stats[k][name])
-            recovery = recovery_ratio(no_mean, method_mean, full_mean)
-            print(f"{name:12s}: {100.0 * recovery:.2f}%")
+            method_full_mean = mean_or_nan(stats[k][f"{name}__full"])
+            method_no_mean = mean_or_nan(stats[k][f"{name}__no"])
+            recovery = recovery_ratio(method_no_mean, method_mean, method_full_mean)
+            print(f"{name:14s}: {100.0 * recovery:.2f}%")
+
+
+def parse_int_set(value: str) -> set[int]:
+    if not value:
+        return set()
+    return {int(item.strip()) for item in value.split(",") if item.strip()}
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--jsonl", default=None)
     parser.add_argument("--max_samples", type=int, default=200)
+    parser.add_argument("--enable_greedy_oracle", action="store_true")
+    parser.add_argument("--greedy_max_samples", type=int, default=30)
+    parser.add_argument("--greedy_candidate_limit", type=int, default=96)
+    parser.add_argument("--greedy_budgets", default="64")
     args = parser.parse_args()
 
     cfg = load_yaml(args.config)
@@ -220,18 +334,28 @@ def main():
     scorer.load_state_dict(ckpt["model"])
     scorer.eval()
 
+    eval_jsonl = args.jsonl or cfg["data"]["val_jsonl"]
+    print(f"eval jsonl: {eval_jsonl}")
     samples = load_jsonl(
-        cfg["data"]["val_jsonl"],
+        eval_jsonl,
         image_root=cfg["data"]["image_root"],
         max_samples=args.max_samples,
     )
 
     budgets = cfg["eval"]["budgets"]
+    greedy_budgets = parse_int_set(args.greedy_budgets) & set(budgets)
     eval_metric = normalize_metric_name(
         cfg.get("eval", {}).get("metric", cfg["oracle"].get("target", "gt_ce"))
     )
     layer_idx = cfg["model"]["layer_idx"]
     print(f"eval metric: {eval_metric}")
+    if args.enable_greedy_oracle:
+        print(
+            "greedy oracle enabled: "
+            f"max_samples={args.greedy_max_samples}, "
+            f"candidate_limit={args.greedy_candidate_limit}, "
+            f"budgets={sorted(greedy_budgets)}"
+        )
 
     stats_all = make_stats(budgets)
     stats_vs = make_stats(budgets)
@@ -302,6 +426,26 @@ def main():
                 teacher_log_probs=teacher_log_probs,
                 chunk_size=cfg["oracle"]["candidate_chunk_size"],
             )
+            greedy_by_budget = {}
+            if (
+                args.enable_greedy_oracle
+                and greedy_budgets
+                and sample_idx < args.greedy_max_samples
+            ):
+                candidate_pool = oracle_ranked[
+                    : min(args.greedy_candidate_limit, oracle_ranked.numel())
+                ]
+                greedy_by_budget = choose_greedy_set_oracle(
+                    wrapper=wrapper,
+                    prepared=prepared,
+                    corrupted=corrupted,
+                    full=full,
+                    candidate_pool=candidate_pool,
+                    budgets=greedy_budgets,
+                    metric_name=eval_metric,
+                    teacher_log_probs=teacher_log_probs,
+                    chunk_size=cfg["oracle"]["candidate_chunk_size"],
+                )
 
             for k in budgets:
                 idx_random = choose_random(candidates, k)
@@ -315,7 +459,7 @@ def main():
                     candidates=candidates,
                     k=k,
                 )
-                idx_oracle = oracle_ranked[: min(k, oracle_ranked.numel())]
+                idx_oracle_single = oracle_ranked[: min(k, oracle_ranked.numel())]
 
                 losses = {
                     "random": compute_metric_from_image_features(
@@ -339,14 +483,22 @@ def main():
                         eval_metric,
                         teacher_log_probs,
                     ),
-                    "oracle": compute_metric_from_image_features(
+                    "oracle_single": compute_metric_from_image_features(
                         wrapper,
                         prepared,
-                        restore_by_indices(corrupted, full, idx_oracle),
+                        restore_by_indices(corrupted, full, idx_oracle_single),
                         eval_metric,
                         teacher_log_probs,
                     ),
                 }
+                if k in greedy_by_budget:
+                    losses["oracle_greedy"] = compute_metric_from_image_features(
+                        wrapper,
+                        prepared,
+                        restore_by_indices(corrupted, full, greedy_by_budget[k]),
+                        eval_metric,
+                        teacher_log_probs,
+                    )
 
                 append_losses(stats_all, k, loss_full, loss_no, losses)
                 if is_vision_sensitive:

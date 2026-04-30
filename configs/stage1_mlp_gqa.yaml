@@ -8,10 +8,10 @@ model:
   layer_idx: 12
 
 data:
-  train_jsonl: data/gqa_gqa200.jsonl
-  val_jsonl: data/gqa_gqa200.jsonl
+  train_jsonl: data/gqa_train1000.jsonl
+  val_jsonl: data/gqa_val200.jsonl
   image_root: ""
-  max_samples: 200
+  max_samples: 1000
 
 corruption:
   mode: erasure
@@ -23,7 +23,7 @@ oracle:
   target: teacher_kl
   max_candidates_per_sample: 128
   candidate_chunk_size: 16
-  save_dir: outputs/oracle_cache/gqa_teacher_train
+  save_dir: outputs/oracle_cache/gqa_teacher_train1000
 
 scorer:
   hidden_dim: 4096
@@ -39,7 +39,7 @@ train:
   pairs_per_sample: 2048
   list_loss_weight: 0.2
   grad_clip: 1.0
-  checkpoint_path: outputs/checkpoints/mlp_scorer_gqa_teacher.pt
+  checkpoint_path: outputs/checkpoints/mlp_scorer_gqa_teacher_train1000.pt
 
 eval:
   metric: teacher_kl

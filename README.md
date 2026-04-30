@@ -74,11 +74,52 @@ sbatch --export=ALL,GQA_ROOT=/scratch/prj/nmes_simeone/datasets/gqa scripts/run_
 
 Then run the GQA stage-1 experiment. The preparation script filters to balanced
 questions, excludes yes/no answers by default, downloads only the selected images,
-and writes `data/gqa_gqa200.jsonl`.
+and writes disjoint train/val/test jsonl files:
+
+```text
+data/gqa_train1000.jsonl
+data/gqa_val200.jsonl
+data/gqa_test300.jsonl
+```
 
 ```bash
-sbatch --export=ALL,GQA_ROOT=/scratch/prj/nmes_simeone/datasets/gqa,MAX_SAMPLES=200,EVAL_SAMPLES=50 scripts/run_stage1_gqa_a100_80g.slurm
+sbatch --export=ALL,GQA_ROOT=/scratch/prj/nmes_simeone/datasets/gqa,TRAIN_SAMPLES=1000,VAL_SAMPLES=200,TEST_SAMPLES=300 scripts/run_stage1_gqa_a100_80g.slurm
 ```
+
+This uses `configs/stage1_mlp_gqa.yaml`, builds the teacher-KL cache under
+`outputs/oracle_cache/gqa_teacher_train1000`, trains
+`outputs/checkpoints/mlp_scorer_gqa_teacher_train1000.pt`, then evaluates on val
+and test jsonl files with no overlap from the train cache.
+
+## Greedy Set Oracle Check
+
+The normal oracle ranks tokens by single-token gain. For top-K retransmission,
+token interactions mean that this is not the true set oracle. To check that case,
+run the cumulative greedy oracle on a small test subset:
+
+```bash
+sbatch --export=ALL,GREEDY_SAMPLES=30,GREEDY_CANDIDATE_LIMIT=96,GREEDY_BUDGETS=64 scripts/run_greedy_oracle_check_a100_80g.slurm
+```
+
+With `GREEDY_CANDIDATE_LIMIT=96`, the greedy oracle is computed over the top 96
+single-token candidates to keep cost bounded. Increase this limit for a more exact
+but slower check.
+
+## Sweeps
+
+Layer sweep:
+
+```bash
+sbatch --export=ALL,SWEEP=layer,VALUES=4,8,12,16,20,24,TRAIN_SAMPLES=300,VAL_SAMPLES=100 scripts/run_sweep_gqa_a100_80g.slurm
+```
+
+Drop-ratio sweep:
+
+```bash
+sbatch --export=ALL,SWEEP=drop,VALUES=0.25,0.5,0.75,TRAIN_SAMPLES=300,VAL_SAMPLES=100 scripts/run_sweep_gqa_a100_80g.slurm
+```
+
+Experiment notes and current results are in `docs/experiment_log.md`.
 
 Generated toy images, oracle cache files, checkpoints, logs, model weights, and conda
 environments are intentionally ignored by git.
