@@ -192,8 +192,20 @@ Dependent checks:
 
 ```text
 greedy set oracle check: job 33619177, afterok:33619174
-layer sweep:             job 33619178, afterok:33619177
-drop-ratio sweep:        job 33619179, afterok:33619178
+```
+
+Independent parallel sweeps:
+
+```text
+layer=4:  job 33619206
+layer=8:  job 33619207
+layer=12: job 33619208
+layer=16: job 33619209
+layer=20: job 33619210
+layer=24: job 33619211
+drop=0.25: job 33619212
+drop=0.5:  job 33619213
+drop=0.75: job 33619214
 ```
 
 ## C. Layer Sweep
