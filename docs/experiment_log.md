@@ -184,21 +184,31 @@ checkpoint: outputs/checkpoints/mlp_scorer_gqa_teacher_train1000.pt
 Status:
 
 ```text
-submitted
-Slurm job: 33619174
+resubmitted after interruptible preemption
+previous Slurm job: 33619174, PREEMPTED after 439 / 1000 cache files
+current Slurm job: 33638403
 ```
 
 Dependent checks:
 
 ```text
-greedy set oracle check: job 33619177, afterok:33619174
+greedy set oracle check: job 33638406, afterok:33638403
 ```
 
 Sweep jobs:
 
 ```text
-layer sweep, values {4, 8, 12, 16, 20, 24}: job 33619373
-drop sweep, values {0.25, 0.5, 0.75}:      job 33619374
+layer sweep, values {4, 8, 12, 16, 20, 24}: job 33638409
+drop sweep, values {0.25, 0.5, 0.75}:      job 33638410
+```
+
+Preliminary completed drop point:
+
+```text
+drop=0.25, train=300, val=100
+K=16: mlp recovery 18.82%, oracle_single 48.23%
+K=32: mlp recovery 26.35%, oracle_single 53.63%
+K=64: mlp recovery 41.96%, oracle_single 57.69%
 ```
 
 ## C. Layer Sweep

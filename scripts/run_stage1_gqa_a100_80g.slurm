@@ -8,6 +8,7 @@
 #SBATCH --time=08:00:00
 #SBATCH --output=outputs/slurm/%x-%j.out
 #SBATCH --error=outputs/slurm/%x-%j.err
+#SBATCH --requeue
 
 set -euo pipefail
 
