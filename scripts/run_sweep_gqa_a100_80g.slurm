@@ -19,7 +19,7 @@ HF_CACHE=/scratch/prj/nmes_simeone/xty_hf_models
 SWEEP=${SWEEP:-layer}
 VALUES=${VALUES:-4,8,12,16,20,24}
 TRAIN_SAMPLES=${TRAIN_SAMPLES:-300}
-VAL_SAMPLES=${VAL_SAMPLES:-100}
+EVAL_SAMPLES=${EVAL_SAMPLES:-100}
 
 cd "$PROJECT_DIR"
 source "$CONDA_ROOT/etc/profile.d/conda.sh"
@@ -46,13 +46,13 @@ PY
 echo "SWEEP=${SWEEP}"
 echo "VALUES=${VALUES}"
 echo "TRAIN_SAMPLES=${TRAIN_SAMPLES}"
-echo "VAL_SAMPLES=${VAL_SAMPLES}"
+echo "EVAL_SAMPLES=${EVAL_SAMPLES}"
 
 python -u scripts/10_run_sweep.py \
   --base_config configs/stage1_mlp_gqa.yaml \
   --sweep "$SWEEP" \
   --values "$VALUES" \
   --train_samples "$TRAIN_SAMPLES" \
-  --val_samples "$VAL_SAMPLES" \
+  --val_samples "$EVAL_SAMPLES" \
   --train_jsonl data/gqa_train1000.jsonl \
-  --val_jsonl data/gqa_val200.jsonl
+  --val_jsonl data/gqa_test300.jsonl

@@ -9,7 +9,7 @@ model:
 
 data:
   train_jsonl: data/gqa_train1000.jsonl
-  val_jsonl: data/gqa_val200.jsonl
+  test_jsonl: data/gqa_test300.jsonl
   image_root: ""
   max_samples: 1000
 

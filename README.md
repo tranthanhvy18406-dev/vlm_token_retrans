@@ -74,22 +74,21 @@ sbatch --export=ALL,GQA_ROOT=/scratch/prj/nmes_simeone/datasets/gqa scripts/run_
 
 Then run the GQA stage-1 experiment. The preparation script filters to balanced
 questions, excludes yes/no answers by default, downloads only the selected images,
-and writes disjoint train/val/test jsonl files:
+and writes disjoint train/test jsonl files:
 
 ```text
 data/gqa_train1000.jsonl
-data/gqa_val200.jsonl
 data/gqa_test300.jsonl
 ```
 
 ```bash
-sbatch --export=ALL,GQA_ROOT=/scratch/prj/nmes_simeone/datasets/gqa,TRAIN_SAMPLES=1000,VAL_SAMPLES=200,TEST_SAMPLES=300 scripts/run_stage1_gqa_a100_80g.slurm
+sbatch --export=ALL,GQA_ROOT=/scratch/prj/nmes_simeone/datasets/gqa,TRAIN_SAMPLES=500,TEST_SAMPLES=300 scripts/run_stage1_gqa_a100_80g.slurm
 ```
 
 This uses `configs/stage1_mlp_gqa.yaml`, builds the teacher-KL cache under
 `outputs/oracle_cache/gqa_teacher_train1000`, trains
-`outputs/checkpoints/mlp_scorer_gqa_teacher_train1000.pt`, then evaluates on val
-and test jsonl files with no overlap from the train cache.
+`outputs/checkpoints/mlp_scorer_gqa_teacher_train1000.pt`, then evaluates on the
+GQA val-balanced held-out test jsonl with no image overlap from the train cache.
 
 ## Greedy Set Oracle Check
 
@@ -110,13 +109,15 @@ but slower check.
 Layer sweep:
 
 ```bash
-sbatch --export=ALL,SWEEP=layer,VALUES=4,8,12,16,20,24,TRAIN_SAMPLES=300,VAL_SAMPLES=100 scripts/run_sweep_gqa_a100_80g.slurm
+env SWEEP=layer VALUES=8,12,16,20 TRAIN_SAMPLES=200 EVAL_SAMPLES=50 \
+  sbatch --export=ALL,SWEEP,VALUES,TRAIN_SAMPLES,EVAL_SAMPLES scripts/run_sweep_gqa_a100_80g.slurm
 ```
 
 Drop-ratio sweep:
 
 ```bash
-sbatch --export=ALL,SWEEP=drop,VALUES=0.25,0.5,0.75,TRAIN_SAMPLES=300,VAL_SAMPLES=100 scripts/run_sweep_gqa_a100_80g.slurm
+env SWEEP=drop VALUES=0.25,0.5,0.75 TRAIN_SAMPLES=200 EVAL_SAMPLES=50 \
+  sbatch --export=ALL,SWEEP,VALUES,TRAIN_SAMPLES,EVAL_SAMPLES scripts/run_sweep_gqa_a100_80g.slurm
 ```
 
 Experiment notes and current results are in `docs/experiment_log.md`.

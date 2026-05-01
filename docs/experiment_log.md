@@ -144,13 +144,12 @@ GREEDY_SAMPLES=30
 GREEDY_BUDGETS=64
 ```
 
-## Formal GQA Split Plan
+## Formal GQA Train/Test Split Plan
 
-The current formal run uses non-overlapping split files:
+The current formal run uses non-overlapping train/test split files:
 
 ```text
 train: data/gqa_train1000.jsonl
-val:   data/gqa_val200.jsonl
 test:  data/gqa_test300.jsonl
 ```
 
@@ -160,18 +159,18 @@ The split script:
 scripts/09_prepare_gqa_splits.py
 ```
 
-Filters balanced GQA questions, excludes yes/no answers by default, keeps short answers, enforces disjoint image ids across splits, and downloads only selected Visual Genome images into:
+Filters balanced GQA questions, excludes yes/no answers by default, keeps short answers, enforces disjoint image ids across train/test, and downloads only selected Visual Genome images into:
 
 ```text
 data/gqa_images/
 ```
 
-## Lightweight GQA 500/100 Run
+## Lightweight GQA 500/300 Train/Test Run
 
 Command:
 
 ```bash
-sbatch --export=ALL,GQA_ROOT=/scratch/prj/nmes_simeone/datasets/gqa,TRAIN_SAMPLES=500,VAL_SAMPLES=100,TEST_SAMPLES=100 scripts/run_stage1_gqa_a100_80g.slurm
+sbatch --export=ALL,GQA_ROOT=/scratch/prj/nmes_simeone/datasets/gqa,TRAIN_SAMPLES=500,TEST_SAMPLES=300 scripts/run_stage1_gqa_a100_80g.slurm
 ```
 
 Outputs:
@@ -184,16 +183,17 @@ checkpoint: outputs/checkpoints/mlp_scorer_gqa_teacher_train1000.pt
 Status:
 
 ```text
-lightweight proof-of-concept run submitted
+train/test-only rerun submitted
 previous Slurm job: 33619174, PREEMPTED after 439 / 1000 cache files
-current Slurm job: 33638747, COMPLETED in 01:04:16
+completed intermediate train/val/test Slurm job: 33638747, COMPLETED in 01:04:16
+current train/test-only Slurm job: 33640992
 cache built: 500 / 500
 ```
 
 Sweep jobs:
 
 ```text
-layer sweep, values {8, 12, 16, 20}, train=200, val=50: job 33638748
+layer sweep, values {8, 12, 16, 20}, train=200, test=50: job 33640993
 drop sweep deferred
 greedy set oracle deferred until the main POC result is stable
 ```

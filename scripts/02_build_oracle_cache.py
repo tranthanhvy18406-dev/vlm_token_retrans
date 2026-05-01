@@ -44,7 +44,10 @@ def main():
         device_map=cfg["model"].get("device_map"),
     )
 
-    jsonl_path = cfg["data"]["train_jsonl"] if args.split == "train" else cfg["data"]["val_jsonl"]
+    if args.split == "train":
+        jsonl_path = cfg["data"]["train_jsonl"]
+    else:
+        jsonl_path = cfg["data"].get("test_jsonl") or cfg["data"]["val_jsonl"]
     samples = load_jsonl(
         jsonl_path,
         image_root=cfg["data"]["image_root"],

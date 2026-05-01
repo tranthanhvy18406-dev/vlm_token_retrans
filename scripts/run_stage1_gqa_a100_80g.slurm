@@ -18,7 +18,6 @@ CONDA_ENV=/scratch/users/k24116578/token_env
 HF_CACHE=/scratch/prj/nmes_simeone/xty_hf_models
 GQA_ROOT=${GQA_ROOT:-/scratch/prj/nmes_simeone/datasets/gqa}
 TRAIN_SAMPLES=${TRAIN_SAMPLES:-1000}
-VAL_SAMPLES=${VAL_SAMPLES:-200}
 TEST_SAMPLES=${TEST_SAMPLES:-300}
 PREPARE_GQA_SPLITS=${PREPARE_GQA_SPLITS:-auto}
 
@@ -46,14 +45,12 @@ PY
 
 echo "GQA_ROOT=${GQA_ROOT}"
 echo "TRAIN_SAMPLES=${TRAIN_SAMPLES}"
-echo "VAL_SAMPLES=${VAL_SAMPLES}"
 echo "TEST_SAMPLES=${TEST_SAMPLES}"
 echo "PREPARE_GQA_SPLITS=${PREPARE_GQA_SPLITS}"
 
 if [ "$PREPARE_GQA_SPLITS" = "1" ] || {
   [ "$PREPARE_GQA_SPLITS" = "auto" ] && {
     [ ! -s data/gqa_train1000.jsonl ] || \
-    [ ! -s data/gqa_val200.jsonl ] || \
     [ ! -s data/gqa_test300.jsonl ]
   }
 }; then
@@ -61,10 +58,8 @@ if [ "$PREPARE_GQA_SPLITS" = "1" ] || {
     --questions "$GQA_ROOT/questions1.2.zip" \
     --image_dir data/gqa_images \
     --train_output data/gqa_train1000.jsonl \
-    --val_output data/gqa_val200.jsonl \
     --test_output data/gqa_test300.jsonl \
     --train_count "$TRAIN_SAMPLES" \
-    --val_count "$VAL_SAMPLES" \
     --test_count "$TEST_SAMPLES"
 else
   echo "Using existing GQA split jsonl files."
@@ -80,12 +75,6 @@ python -u scripts/02_build_oracle_cache.py \
 
 python -u scripts/03_train_mlp_scorer.py \
   --config configs/stage1_mlp_gqa.yaml
-
-python -u scripts/04_eval_retrans_loss.py \
-  --config configs/stage1_mlp_gqa.yaml \
-  --checkpoint outputs/checkpoints/mlp_scorer_gqa_teacher_train1000.pt \
-  --jsonl data/gqa_val200.jsonl \
-  --max_samples "$VAL_SAMPLES"
 
 python -u scripts/04_eval_retrans_loss.py \
   --config configs/stage1_mlp_gqa.yaml \

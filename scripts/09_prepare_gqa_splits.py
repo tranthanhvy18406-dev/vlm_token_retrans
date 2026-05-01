@@ -276,10 +276,8 @@ def main():
     parser.add_argument("--questions", required=True)
     parser.add_argument("--image_dir", default="data/gqa_images")
     parser.add_argument("--train_output", default="data/gqa_train1000.jsonl")
-    parser.add_argument("--val_output", default="data/gqa_val200.jsonl")
     parser.add_argument("--test_output", default="data/gqa_test300.jsonl")
     parser.add_argument("--train_count", type=int, default=1000)
-    parser.add_argument("--val_count", type=int, default=200)
     parser.add_argument("--test_count", type=int, default=300)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--include_yesno", action="store_true")
@@ -313,27 +311,12 @@ def main():
         candidate_pool_factor=args.candidate_pool_factor,
         max_scan_items=args.max_scan_items,
     )
-    val_samples, val_stats = build_split(
-        questions_zip=args.questions,
-        member="val_balanced_questions.json",
-        split_name="val",
-        count=args.val_count,
-        seed=args.seed + 1,
-        image_dir=args.image_dir,
-        used_qids=used_qids,
-        used_image_ids=used_image_ids,
-        excluded_answers=excluded,
-        max_answer_words=args.max_answer_words,
-        disjoint_images=disjoint_images,
-        candidate_pool_factor=args.candidate_pool_factor,
-        max_scan_items=args.max_scan_items,
-    )
     test_samples, test_stats = build_split(
         questions_zip=args.questions,
         member="val_balanced_questions.json",
         split_name="test",
         count=args.test_count,
-        seed=args.seed + 2,
+        seed=args.seed + 1,
         image_dir=args.image_dir,
         used_qids=used_qids,
         used_image_ids=used_image_ids,
@@ -345,11 +328,9 @@ def main():
     )
 
     write_jsonl(args.train_output, train_samples)
-    write_jsonl(args.val_output, val_samples)
     write_jsonl(args.test_output, test_samples)
 
     print(f"wrote train: {len(train_samples)} to {args.train_output}, stats={train_stats}")
-    print(f"wrote val: {len(val_samples)} to {args.val_output}, stats={val_stats}")
     print(f"wrote test: {len(test_samples)} to {args.test_output}, stats={test_stats}")
     print(f"unique image_ids across splits: {len(used_image_ids)}")
 

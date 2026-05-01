@@ -334,7 +334,7 @@ def main():
     scorer.load_state_dict(ckpt["model"])
     scorer.eval()
 
-    eval_jsonl = args.jsonl or cfg["data"]["val_jsonl"]
+    eval_jsonl = args.jsonl or cfg["data"].get("test_jsonl") or cfg["data"]["val_jsonl"]
     print(f"eval jsonl: {eval_jsonl}")
     samples = load_jsonl(
         eval_jsonl,
