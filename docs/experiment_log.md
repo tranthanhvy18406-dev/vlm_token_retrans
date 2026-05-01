@@ -186,8 +186,8 @@ Status:
 ```text
 lightweight proof-of-concept run submitted
 previous Slurm job: 33619174, PREEMPTED after 439 / 1000 cache files
-current Slurm job: 33638747
-remaining cache to build before training: 61 / 500
+current Slurm job: 33638747, COMPLETED in 01:04:16
+cache built: 500 / 500
 ```
 
 Sweep jobs:
@@ -196,6 +196,38 @@ Sweep jobs:
 layer sweep, values {8, 12, 16, 20}, train=200, val=50: job 33638748
 drop sweep deferred
 greedy set oracle deferred until the main POC result is stable
+```
+
+Main POC validation result, `data/gqa_val200.jsonl`, first 100 samples:
+
+```text
+K=16 recovery: random 20.08%, hidden_norm 19.08%, mlp 25.11%, oracle_single 45.17%
+K=32 recovery: random 39.69%, hidden_norm 41.62%, mlp 44.65%, oracle_single 55.60%
+K=64 recovery: random 63.81%, hidden_norm 64.35%, mlp 65.41%, oracle_single 72.47%
+```
+
+Main POC test result, `data/gqa_test300.jsonl`, first 100 samples:
+
+```text
+K=16 recovery: random 23.82%, hidden_norm 24.99%, mlp 28.63%, oracle_single 52.73%
+K=32 recovery: random 48.37%, hidden_norm 44.51%, mlp 48.58%, oracle_single 61.14%
+K=64 recovery: random 64.68%, hidden_norm 62.33%, mlp 64.50%, oracle_single 71.83%
+```
+
+Interpretation:
+
+```text
+The POC passes the main trend on validation: MLP beats random and hidden_norm at all K, but it is still well below single-token oracle.
+On test, MLP is best at K=16 and roughly tied with random at K=32/K=64. More data or stronger regularization may be needed for stable generalization.
+```
+
+Partial layer sweep result, `train=200`, `val=50`:
+
+```text
+layer=8:  K16 mlp 16.92%, K32 mlp 39.65%, K64 mlp 66.32%
+layer=12: K16 mlp 18.87%, K32 mlp 38.03%, K64 mlp 69.22%
+layer=16: K16 mlp 15.94%, K32 mlp 40.73%, K64 mlp 67.95%
+layer=20: running
 ```
 
 Preliminary completed drop point:
