@@ -166,12 +166,12 @@ Filters balanced GQA questions, excludes yes/no answers by default, keeps short 
 data/gqa_images/
 ```
 
-## Formal GQA 1000/200/300 Run
+## Lightweight GQA 500/100 Run
 
 Command:
 
 ```bash
-sbatch --export=ALL,GQA_ROOT=/scratch/prj/nmes_simeone/datasets/gqa,TRAIN_SAMPLES=1000,VAL_SAMPLES=200,TEST_SAMPLES=300 scripts/run_stage1_gqa_a100_80g.slurm
+sbatch --export=ALL,GQA_ROOT=/scratch/prj/nmes_simeone/datasets/gqa,TRAIN_SAMPLES=500,VAL_SAMPLES=100,TEST_SAMPLES=100 scripts/run_stage1_gqa_a100_80g.slurm
 ```
 
 Outputs:
@@ -184,22 +184,18 @@ checkpoint: outputs/checkpoints/mlp_scorer_gqa_teacher_train1000.pt
 Status:
 
 ```text
-resubmitted after interruptible preemption
+lightweight proof-of-concept run submitted
 previous Slurm job: 33619174, PREEMPTED after 439 / 1000 cache files
-current Slurm job: 33638403
-```
-
-Dependent checks:
-
-```text
-greedy set oracle check: job 33638406, afterok:33638403
+current Slurm job: 33638747
+remaining cache to build before training: 61 / 500
 ```
 
 Sweep jobs:
 
 ```text
-layer sweep, values {4, 8, 12, 16, 20, 24}: job 33638409
-drop sweep, values {0.25, 0.5, 0.75}:      job 33638410
+layer sweep, values {8, 12, 16, 20}, train=200, val=50: job 33638748
+drop sweep deferred
+greedy set oracle deferred until the main POC result is stable
 ```
 
 Preliminary completed drop point:
