@@ -188,6 +188,8 @@ previous Slurm job: 33619174, PREEMPTED after 439 / 1000 cache files
 completed intermediate train/val/test Slurm job: 33638747, COMPLETED in 01:04:16
 current train/test-only Slurm job: 33640992
 cache built: 500 / 500
+train/test-only Slurm job 33640992 was PREEMPTED during model loading
+eval-only test300 Slurm job: 33650649
 ```
 
 Sweep jobs:
@@ -221,13 +223,13 @@ The POC passes the main trend on validation: MLP beats random and hidden_norm at
 On test, MLP is best at K=16 and roughly tied with random at K=32/K=64. More data or stronger regularization may be needed for stable generalization.
 ```
 
-Partial layer sweep result, `train=200`, `val=50`:
+Layer sweep result, `train=200`, `test=50`:
 
 ```text
-layer=8:  K16 mlp 16.92%, K32 mlp 39.65%, K64 mlp 66.32%
-layer=12: K16 mlp 18.87%, K32 mlp 38.03%, K64 mlp 69.22%
-layer=16: K16 mlp 15.94%, K32 mlp 40.73%, K64 mlp 67.95%
-layer=20: running
+layer=8:  K16 mlp 22.66%, K32 mlp 41.58%, K64 mlp 61.67%
+layer=12: K16 mlp 22.18%, K32 mlp 43.59%, K64 mlp 65.09%
+layer=16: K16 mlp 21.80%, K32 mlp 40.96%, K64 mlp 65.75%
+layer=20: K16 mlp 21.93%, K32 mlp 42.87%, K64 mlp 63.63%
 ```
 
 Preliminary completed drop point:
