@@ -190,6 +190,7 @@ current train/test-only Slurm job: 33640992
 cache built: 500 / 500
 train/test-only Slurm job 33640992 was PREEMPTED during model loading
 eval-only test300 Slurm job: 33650649
+eval-only test300 Slurm job 33650649 completed in 01:19:16
 ```
 
 Sweep jobs:
@@ -216,11 +217,19 @@ K=32 recovery: random 48.37%, hidden_norm 44.51%, mlp 48.58%, oracle_single 61.1
 K=64 recovery: random 64.68%, hidden_norm 62.33%, mlp 64.50%, oracle_single 71.83%
 ```
 
+Main POC test result, `data/gqa_test300.jsonl`, all 300 samples:
+
+```text
+K=16 recovery: random 20.44%, hidden_norm 21.44%, mlp 23.37%, oracle_single 47.16%
+K=32 recovery: random 38.60%, hidden_norm 37.89%, mlp 41.15%, oracle_single 58.42%
+K=64 recovery: random 63.66%, hidden_norm 61.66%, mlp 65.49%, oracle_single 71.03%
+```
+
 Interpretation:
 
 ```text
 The POC passes the main trend on validation: MLP beats random and hidden_norm at all K, but it is still well below single-token oracle.
-On test, MLP is best at K=16 and roughly tied with random at K=32/K=64. More data or stronger regularization may be needed for stable generalization.
+On all 300 held-out test samples, MLP beats random and hidden_norm at K=16/32/64, but remains below the single-token oracle.
 ```
 
 Layer sweep result, `train=200`, `test=50`:
