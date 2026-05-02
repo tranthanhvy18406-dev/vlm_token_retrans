@@ -20,6 +20,9 @@ SWEEP=${SWEEP:-layer}
 VALUES=${VALUES:-4,8,12,16,20,24}
 TRAIN_SAMPLES=${TRAIN_SAMPLES:-300}
 EVAL_SAMPLES=${EVAL_SAMPLES:-100}
+CONFIG_OUT_DIR=${CONFIG_OUT_DIR:-outputs/sweep_configs}
+CACHE_ROOT=${CACHE_ROOT:-outputs/oracle_cache/sweeps}
+CHECKPOINT_ROOT=${CHECKPOINT_ROOT:-outputs/checkpoints/sweeps}
 
 cd "$PROJECT_DIR"
 source "$CONDA_ROOT/etc/profile.d/conda.sh"
@@ -47,6 +50,9 @@ echo "SWEEP=${SWEEP}"
 echo "VALUES=${VALUES}"
 echo "TRAIN_SAMPLES=${TRAIN_SAMPLES}"
 echo "EVAL_SAMPLES=${EVAL_SAMPLES}"
+echo "CONFIG_OUT_DIR=${CONFIG_OUT_DIR}"
+echo "CACHE_ROOT=${CACHE_ROOT}"
+echo "CHECKPOINT_ROOT=${CHECKPOINT_ROOT}"
 
 python -u scripts/10_run_sweep.py \
   --base_config configs/stage1_mlp_gqa.yaml \
@@ -55,4 +61,7 @@ python -u scripts/10_run_sweep.py \
   --train_samples "$TRAIN_SAMPLES" \
   --val_samples "$EVAL_SAMPLES" \
   --train_jsonl data/gqa_train1000.jsonl \
-  --val_jsonl data/gqa_test300.jsonl
+  --val_jsonl data/gqa_test300.jsonl \
+  --config_out_dir "$CONFIG_OUT_DIR" \
+  --cache_root "$CACHE_ROOT" \
+  --checkpoint_root "$CHECKPOINT_ROOT"

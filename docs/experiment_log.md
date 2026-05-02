@@ -197,7 +197,7 @@ Sweep jobs:
 
 ```text
 layer sweep, values {8, 12, 16, 20}, train=200, test=50: job 33640993
-drop sweep deferred
+drop sweep, values {0.25, 0.5, 0.75}, train=200, test=50: job 33651626
 greedy set oracle deferred until the main POC result is stable
 ```
 
