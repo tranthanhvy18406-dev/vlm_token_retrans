@@ -12,6 +12,7 @@ from src.features import aux_dim_for_mode, build_aux_features
 from src.losses import (
     listwise_kl_loss,
     pairwise_ranking_loss,
+    robust_pairwise_ranking_loss,
     topk_ce_loss,
     weighted_pairwise_ranking_loss,
 )
@@ -40,6 +41,13 @@ def build_candidate_tensors(cache, device, scorer_cfg):
     h = hidden[valid]
     aux_mode = scorer_cfg.get("aux_mode", "legacy")
     pos_fourier_bands = int(scorer_cfg.get("pos_fourier_bands", 0))
+    attention_layers = scorer_cfg.get("attention_layers", [])
+    attn_q_to_vis = cache.get("attn_q_to_vis")
+    attn_text_to_vis_mean = cache.get("attn_text_to_vis_mean")
+    if attn_q_to_vis is not None:
+        attn_q_to_vis = attn_q_to_vis.to(device=device, dtype=torch.float32)
+    if attn_text_to_vis_mean is not None:
+        attn_text_to_vis_mean = attn_text_to_vis_mean.to(device=device, dtype=torch.float32)
     aux = build_aux_features(
         hidden=hidden,
         pos=pos,
@@ -48,10 +56,12 @@ def build_candidate_tensors(cache, device, scorer_cfg):
         selection=valid,
         mode=aux_mode,
         pos_fourier_bands=pos_fourier_bands,
+        attn_q_to_vis=attn_q_to_vis,
+        attn_text_to_vis_mean=attn_text_to_vis_mean,
     )
     expected_aux_dim = int(scorer_cfg["aux_dim"])
     actual_aux_dim = aux.size(-1)
-    inferred_aux_dim = aux_dim_for_mode(aux_mode, pos_fourier_bands)
+    inferred_aux_dim = aux_dim_for_mode(aux_mode, pos_fourier_bands, attention_layers)
     if actual_aux_dim != expected_aux_dim or inferred_aux_dim != expected_aux_dim:
         raise RuntimeError(
             "Aux dimension mismatch: "
@@ -83,6 +93,13 @@ def compute_rank_loss(scores, gains, cfg, pairs_per_sample):
             gains=gains,
             pairs_per_sample=pairs_per_sample,
             top_frac=float(cfg["train"].get("pairwise_top_frac", 0.5)),
+        )
+    if rank_loss_name == "robust_pairwise":
+        return robust_pairwise_ranking_loss(
+            scores=scores,
+            gains=gains,
+            pairs_per_sample=pairs_per_sample,
+            gap_frac=float(cfg["train"].get("robust_gap_frac", 0.05)),
         )
     raise ValueError(f"Unsupported train.rank_loss: {rank_loss_name}")
 

@@ -29,12 +29,14 @@ class LlavaRetransWrapper:
         cache_dir: Optional[str] = None,
         local_files_only: bool = False,
         device_map: Optional[str] = None,
+        attn_implementation: Optional[str] = None,
     ):
         self.device = device
         self.dtype = dtype
         self.cache_dir = cache_dir
         self.local_files_only = local_files_only
         self.device_map = device_map
+        self.attn_implementation = attn_implementation
 
         self.processor = AutoProcessor.from_pretrained(
             model_name,
@@ -49,6 +51,8 @@ class LlavaRetransWrapper:
         }
         if device_map:
             model_kwargs["device_map"] = device_map
+        if attn_implementation:
+            model_kwargs["attn_implementation"] = attn_implementation
 
         self.model = LlavaForConditionalGeneration.from_pretrained(model_name, **model_kwargs)
         if not device_map:
@@ -534,6 +538,63 @@ class LlavaRetransWrapper:
         query_pos = prepared.prompt_ids.shape[1] - 1
         query_hidden = hidden[query_pos, :]
         return visual_hidden.detach(), query_hidden.detach()
+
+    @torch.no_grad()
+    def get_prompt_to_visual_attention(
+        self,
+        prepared: PreparedInput,
+        image_features: torch.Tensor,
+        layer_indices: list[int] | tuple[int, ...],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Return question-aware attention features over visual tokens.
+
+        attn_q_to_vis: [N, L], mean-head attention from the last prompt token to
+        each visual token at each requested language layer.
+        attn_text_to_vis_mean: [N], mean attention from post-image prompt text
+        tokens to each visual token, averaged over requested layers and heads.
+        """
+        embeds = self.make_embeds_with_image_features(prepared, image_features)
+        outputs = self.model(
+            inputs_embeds=embeds,
+            attention_mask=prepared.attention_mask.to(embeds.device),
+            use_cache=False,
+            output_attentions=True,
+            return_dict=True,
+        )
+        attentions = getattr(outputs, "attentions", None)
+        if attentions is None:
+            raise RuntimeError("Model did not return attentions with output_attentions=True.")
+        if len(attentions) == 0:
+            raise RuntimeError(
+                "Model returned an empty attention tuple. Set model.attn_implementation=eager."
+            )
+
+        image_positions = prepared.image_positions.to(embeds.device)
+        query_pos = prepared.prompt_ids.shape[1] - 1
+        prompt_len = prepared.prompt_ids.shape[1]
+        seq_positions = torch.arange(prepared.input_ids.shape[1], device=embeds.device)
+        text_positions = seq_positions[
+            (seq_positions > image_positions.max()) & (seq_positions < prompt_len)
+        ]
+        if text_positions.numel() == 0:
+            text_positions = seq_positions.new_tensor([query_pos])
+
+        q_layers = []
+        text_layers = []
+        for layer_idx in layer_indices:
+            layer_attn = attentions[int(layer_idx)]
+            # [heads, num_visual] -> [num_visual]
+            q_to_vis = layer_attn[0, :, query_pos, image_positions].float().mean(dim=0)
+            # [heads, num_text, num_visual] -> [num_visual]
+            text_to_vis = layer_attn[0, :, text_positions, :][:, :, image_positions]
+            text_to_vis = text_to_vis.float().mean(dim=(0, 1))
+            q_layers.append(q_to_vis)
+            text_layers.append(text_to_vis)
+
+        attn_q_to_vis = torch.stack(q_layers, dim=-1)
+        attn_text_to_vis_mean = torch.stack(text_layers, dim=0).mean(dim=0)
+        return attn_q_to_vis.detach(), attn_text_to_vis_mean.detach()
 
     @torch.no_grad()
     def build_candidate_restored_embeds(

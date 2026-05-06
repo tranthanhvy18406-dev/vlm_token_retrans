@@ -102,6 +102,41 @@ def weighted_pairwise_ranking_loss(
     return (weight * F.softplus(-sign * score_diff)).mean()
 
 
+def robust_pairwise_ranking_loss(
+    scores: torch.Tensor,
+    gains: torch.Tensor,
+    pairs_per_sample: int = 4096,
+    gap_frac: float = 0.05,
+    min_gain_gap: float = 1.0e-6,
+) -> torch.Tensor:
+    """
+    Pairwise loss that ignores tiny gain gaps instead of reweighting large gaps.
+    """
+    device = scores.device
+    num_items = scores.numel()
+
+    if num_items < 2:
+        return scores.sum() * 0.0
+
+    idx_i = torch.randint(0, num_items, (pairs_per_sample,), device=device)
+    idx_j = torch.randint(0, num_items, (pairs_per_sample,), device=device)
+
+    diff_gain = gains[idx_i] - gains[idx_j]
+    gain_std = gains.float().std(unbiased=False)
+    threshold = torch.clamp(gain_std * float(gap_frac), min=float(min_gain_gap))
+    valid = diff_gain.abs() > threshold
+    if valid.sum() == 0:
+        return scores.sum() * 0.0
+
+    idx_i = idx_i[valid]
+    idx_j = idx_j[valid]
+    diff_gain = diff_gain[valid]
+
+    sign = torch.sign(diff_gain)
+    score_diff = scores[idx_i] - scores[idx_j]
+    return F.softplus(-sign * score_diff).mean()
+
+
 def topk_ce_loss(scores: torch.Tensor, gains: torch.Tensor, k: int = 32) -> torch.Tensor:
     """
     Cross-entropy against a uniform distribution over the oracle top-k items.

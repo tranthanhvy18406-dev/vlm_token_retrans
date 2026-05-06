@@ -64,9 +64,19 @@ def choose_hidden_norm(hidden, candidates, k):
     return candidates[torch.topk(scores, k=k).indices]
 
 
-def build_scorer_aux(hidden, pos, reliability, damaged_float, candidates, scorer_cfg):
+def build_scorer_aux(
+    hidden,
+    pos,
+    reliability,
+    damaged_float,
+    candidates,
+    scorer_cfg,
+    attn_q_to_vis=None,
+    attn_text_to_vis_mean=None,
+):
     aux_mode = scorer_cfg.get("aux_mode", "legacy")
     pos_fourier_bands = int(scorer_cfg.get("pos_fourier_bands", 0))
+    attention_layers = scorer_cfg.get("attention_layers", [])
     aux = build_aux_features(
         hidden=hidden,
         pos=pos,
@@ -75,10 +85,12 @@ def build_scorer_aux(hidden, pos, reliability, damaged_float, candidates, scorer
         selection=candidates,
         mode=aux_mode,
         pos_fourier_bands=pos_fourier_bands,
+        attn_q_to_vis=attn_q_to_vis,
+        attn_text_to_vis_mean=attn_text_to_vis_mean,
     )
     expected_aux_dim = int(scorer_cfg["aux_dim"])
     actual_aux_dim = aux.size(-1)
-    inferred_aux_dim = aux_dim_for_mode(aux_mode, pos_fourier_bands)
+    inferred_aux_dim = aux_dim_for_mode(aux_mode, pos_fourier_bands, attention_layers)
     if actual_aux_dim != expected_aux_dim or inferred_aux_dim != expected_aux_dim:
         raise RuntimeError(
             "Aux dimension mismatch: "
@@ -97,6 +109,8 @@ def score_mlp_candidates(
     candidates,
     scorer_cfg,
     query_hidden=None,
+    attn_q_to_vis=None,
+    attn_text_to_vis_mean=None,
 ):
     h = hidden[candidates].float()
     aux = build_scorer_aux(
@@ -106,6 +120,8 @@ def score_mlp_candidates(
         damaged_float=damaged_float,
         candidates=candidates,
         scorer_cfg=scorer_cfg,
+        attn_q_to_vis=attn_q_to_vis,
+        attn_text_to_vis_mean=attn_text_to_vis_mean,
     )
     with torch.no_grad():
         scores = scorer(h, aux, q=query_hidden)
@@ -122,6 +138,8 @@ def choose_mlp(
     k,
     scorer_cfg,
     query_hidden=None,
+    attn_q_to_vis=None,
+    attn_text_to_vis_mean=None,
 ):
     scores = score_mlp_candidates(
         scorer=scorer,
@@ -132,6 +150,8 @@ def choose_mlp(
         candidates=candidates,
         scorer_cfg=scorer_cfg,
         query_hidden=query_hidden,
+        attn_q_to_vis=attn_q_to_vis,
+        attn_text_to_vis_mean=attn_text_to_vis_mean,
     )
     k = min(k, candidates.numel())
     return candidates[torch.topk(scores, k=k).indices]
@@ -147,6 +167,8 @@ def choose_mlp_mmr(
     k,
     scorer_cfg,
     query_hidden=None,
+    attn_q_to_vis=None,
+    attn_text_to_vis_mean=None,
     lam=0.15,
 ):
     scores = score_mlp_candidates(
@@ -158,6 +180,8 @@ def choose_mlp_mmr(
         candidates=candidates,
         scorer_cfg=scorer_cfg,
         query_hidden=query_hidden,
+        attn_q_to_vis=attn_q_to_vis,
+        attn_text_to_vis_mean=attn_text_to_vis_mean,
     )
     h_norm = F.normalize(hidden[candidates].float(), dim=-1)
 
@@ -452,6 +476,7 @@ def main():
         cache_dir=cfg["model"].get("cache_dir"),
         local_files_only=bool(cfg["model"].get("local_files_only", False)),
         device_map=cfg["model"].get("device_map"),
+        attn_implementation=cfg["model"].get("attn_implementation"),
     )
 
     scorer = build_scorer_from_config(cfg, dropout=0.0).to(device)
@@ -524,6 +549,15 @@ def main():
                     prepared=prepared,
                     image_features=corrupted,
                     layer_idx=layer_idx,
+                )
+
+            attn_q_to_vis = None
+            attn_text_to_vis_mean = None
+            if cfg["scorer"].get("aux_mode", "legacy") == "norm_attn":
+                attn_q_to_vis, attn_text_to_vis_mean = wrapper.get_prompt_to_visual_attention(
+                    prepared=prepared,
+                    image_features=corrupted,
+                    layer_indices=cfg["scorer"].get("attention_layers", [2, 4, 8, 12]),
                 )
 
             num_tokens = full.shape[1]
@@ -603,6 +637,8 @@ def main():
                     k=k,
                     scorer_cfg=cfg["scorer"],
                     query_hidden=query_hidden,
+                    attn_q_to_vis=attn_q_to_vis,
+                    attn_text_to_vis_mean=attn_text_to_vis_mean,
                 )
                 idx_oracle_single = oracle_ranked[: min(k, oracle_ranked.numel())]
 
@@ -647,6 +683,8 @@ def main():
                         k=k,
                         scorer_cfg=cfg["scorer"],
                         query_hidden=query_hidden,
+                        attn_q_to_vis=attn_q_to_vis,
+                        attn_text_to_vis_mean=attn_text_to_vis_mean,
                         lam=lam,
                     )
                     losses[method_name] = compute_metric_from_image_features(

@@ -42,6 +42,7 @@ def main():
         cache_dir=cfg["model"].get("cache_dir"),
         local_files_only=bool(cfg["model"].get("local_files_only", False)),
         device_map=cfg["model"].get("device_map"),
+        attn_implementation=cfg["model"].get("attn_implementation"),
     )
 
     if args.split == "train":
@@ -97,6 +98,14 @@ def main():
                 image_features=corrupted_features,
                 layer_idx=layer_idx,
             )
+            attn_q_to_vis = None
+            attn_text_to_vis_mean = None
+            if cfg["scorer"].get("aux_mode", "legacy") == "norm_attn":
+                attn_q_to_vis, attn_text_to_vis_mean = wrapper.get_prompt_to_visual_attention(
+                    prepared=prepared,
+                    image_features=corrupted_features,
+                    layer_indices=cfg["scorer"].get("attention_layers", [2, 4, 8, 12]),
+                )
 
             damaged_indices = damaged_mask.nonzero(as_tuple=False).squeeze(-1)
             if damaged_indices.numel() > max_candidates:
@@ -158,6 +167,11 @@ def main():
                 "oracle_gain": oracle_gain.detach().cpu().to(torch.float32),
                 "base_metric": float(base_metric.item()),
             }
+            if attn_q_to_vis is not None and attn_text_to_vis_mean is not None:
+                cache["attn_q_to_vis"] = attn_q_to_vis.detach().cpu().to(torch.float16)
+                cache["attn_text_to_vis_mean"] = (
+                    attn_text_to_vis_mean.detach().cpu().to(torch.float16)
+                )
 
             torch.save(cache, out_path)
 
