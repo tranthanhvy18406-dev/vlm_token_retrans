@@ -159,6 +159,7 @@ MLP recovery:
 | S4 query + weighted pairwise + topK CE | 24.79% | 38.96% | 63.62% |
 | S4b query + pairwise only | 25.14% | 40.89% | 65.14% |
 | S4c query + weak listwise 0.005 | 25.22% | 40.78% | 64.89% |
+| S5 full-candidate cache + weak listwise 0.005 | 25.17% | 42.81% | 65.85% |
 
 Training-side recall@32/ndcg@32 after epoch 4:
 
@@ -170,6 +171,7 @@ S3: 0.3675 / 0.7237
 S4: 0.3950 / 0.7667
 S4b: 0.3575 / 0.7398
 S4c: 0.3591 / 0.7405
+S5: 0.1669 / 0.6629
 ```
 
 Interpretation:
@@ -191,6 +193,11 @@ Interpretation:
 6. For the next default, use S2a if the target is balanced K=16/32/64 recovery.
    Use S4b only if the paper or system emphasizes very small retransmission
    budgets such as K=16.
+7. Full-candidate oracle labels are the strongest improvement so far. S5
+   matches the query scorer at K=16, clearly beats S2a/S4b/S4c at K=32, and
+   gives the best K=64 in this round. The low S5 cache recall@32 is expected
+   because the candidate set is much larger than the 128-candidate cache; final
+   retransmission recovery is the relevant metric.
 ```
 
 ## Target Definition
