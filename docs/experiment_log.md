@@ -110,6 +110,80 @@ Interpretation:
    but Old MLP remains better at K=16/32/64.
 ```
 
+## Listwise Scale Follow-up on 2026-05-06
+
+Motivation:
+
+```text
+The fixed listwise KL used z-scored gains, tau=0.1, reduction=sum, and
+list_loss_weight=0.2. On 100 cached samples this made the target very peaked:
+average target top-1 probability was 0.813 at tau=0.1. With tau=1.0 it dropped
+to 0.213. Normalizing KL by candidate count also changes the auxiliary loss
+from a large sample-level objective into a small regularizer.
+```
+
+Configs:
+
+```text
+S0: old checkpoint + current eval
+S1: legacy aux + pairwise only
+S2a: legacy aux + pairwise + weak listwise, tau=1.0, weight=0.005, KL/M
+S2b: legacy aux + pairwise + weak listwise, tau=1.0, weight=0.01, KL/M
+S3: legacy aux + weighted_pairwise + topK CE, no listwise
+S4: query-conditioned + norm_stats aux + weighted_pairwise + topK CE, no listwise
+```
+
+All runs below evaluate `data/gqa_test300.jsonl` with 300 samples and teacher-KL
+recovery on L40S. `All samples` and `Vision-sensitive samples` are identical for
+this teacher-KL run: `full_metric=0` and all 300 samples have `full_metric < no_metric`.
+
+Same-run baselines:
+
+| K | random | hidden_norm | oracle_single |
+| - | -: | -: | -: |
+| 16 | 20.64% | 21.15% | 46.89% |
+| 32 | 38.71% | 37.98% | 58.45% |
+| 64 | 63.75% | 62.04% | 71.28% |
+
+MLP recovery:
+
+| Experiment | K=16 | K=32 | K=64 |
+| - | -: | -: | -: |
+| S0 old checkpoint, current eval | 23.51% | 41.09% | 65.68% |
+| S1 pairwise only | 23.62% | 41.04% | 65.25% |
+| S2a weak listwise 0.005 | 23.99% | 41.51% | 65.64% |
+| S2b weak listwise 0.01 | 23.68% | 41.08% | 65.55% |
+| S3 weighted pairwise + topK CE | 21.03% | 35.23% | 59.89% |
+| S4 query + weighted pairwise + topK CE | 24.79% | 38.96% | 63.62% |
+
+Training-side recall@32/ndcg@32 after epoch 4:
+
+```text
+S1: 0.3328 / 0.7185
+S2a: 0.3350 / 0.7196
+S2b: 0.3284 / 0.7167
+S3: 0.3675 / 0.7237
+S4: 0.3950 / 0.7667
+```
+
+Interpretation:
+
+```text
+1. Pairwise-only recovers the old baseline. This confirms that the previous
+   fixed listwise setup was not a harmless implementation fix; it changed the
+   optimization target too strongly.
+2. Weak listwise with tau=1.0, KL/M, and weight=0.005 is the best legacy-MLP
+   result in this round, but the gain is small: +0.48 at K=16 and +0.42 at K=32
+   versus S0, with K=64 essentially tied.
+3. Weighted pairwise + topK CE improves cache ranking metrics but hurts final
+   teacher-KL retransmission recovery. Do not use S3 as the default objective.
+4. Query-conditioned scorer with the weighted/topK objective helps K=16 but
+   hurts K=32 and K=64. Query is still promising, but it should be retried on
+   the safer pairwise or weak-listwise objective instead of S4's objective.
+5. For the next default, use S2a if we want the strongest current legacy MLP;
+   otherwise S1/S0 are the conservative baselines.
+```
+
 ## Target Definition
 
 The original ground-truth CE oracle was:
