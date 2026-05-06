@@ -457,15 +457,15 @@ class LlavaRetransWrapper:
         ).detach()
 
     @torch.no_grad()
-    def get_layer_visual_hidden(
+    def get_layer_hidden(
         self,
         prepared: PreparedInput,
         image_features: torch.Tensor,
         layer_idx: int,
     ) -> torch.Tensor:
         """
-        Returns visual hidden states at language layer layer_idx.
-        shape: [N, D]
+        Returns all sequence hidden states at language layer layer_idx.
+        shape: [S, D]
         """
         cache = {}
 
@@ -490,9 +490,50 @@ class LlavaRetransWrapper:
         if "hidden" not in cache:
             raise RuntimeError(f"Layer hook did not capture hidden state at layer {layer_idx}.")
 
-        hidden = cache["hidden"]
-        visual_hidden = hidden[0, prepared.image_positions.to(hidden.device), :]
+        return cache["hidden"][0].detach()
+
+    @torch.no_grad()
+    def get_layer_visual_hidden(
+        self,
+        prepared: PreparedInput,
+        image_features: torch.Tensor,
+        layer_idx: int,
+    ) -> torch.Tensor:
+        """
+        Returns visual hidden states at language layer layer_idx.
+        shape: [N, D]
+        """
+        hidden = self.get_layer_hidden(
+            prepared=prepared,
+            image_features=image_features,
+            layer_idx=layer_idx,
+        )
+        visual_hidden = hidden[prepared.image_positions.to(hidden.device), :]
         return visual_hidden.detach()
+
+    @torch.no_grad()
+    def get_layer_visual_and_query_hidden(
+        self,
+        prepared: PreparedInput,
+        image_features: torch.Tensor,
+        layer_idx: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Returns visual hidden states and the final prompt-token hidden state.
+
+        The query token is the last prompt position, before supervised answer tokens.
+        With the current prompt format this token can attend to image and question,
+        but not to the answer.
+        """
+        hidden = self.get_layer_hidden(
+            prepared=prepared,
+            image_features=image_features,
+            layer_idx=layer_idx,
+        )
+        visual_hidden = hidden[prepared.image_positions.to(hidden.device), :]
+        query_pos = prepared.prompt_ids.shape[1] - 1
+        query_hidden = hidden[query_pos, :]
+        return visual_hidden.detach(), query_hidden.detach()
 
     @torch.no_grad()
     def build_candidate_restored_embeds(

@@ -104,6 +104,34 @@ With `GREEDY_CANDIDATE_LIMIT=96`, the greedy oracle is computed over the top 96
 single-token candidates to keep cost bounded. Increase this limit for a more exact
 but slower check.
 
+## Scorer Ablations
+
+The current scorer ablation configs are:
+
+```text
+configs/exp1_fixed_listwise_gqa.yaml  # old MLP + fixed listwise KL
+configs/exp2_norm_aux_gqa.yaml        # Exp-1 + raw hidden norm/mean/std aux
+configs/exp4_query_gqa.yaml           # Exp-2 + query-conditioned scorer
+```
+
+MMR is evaluation-only and can be swept on top of an existing checkpoint:
+
+```bash
+sbatch --export=ALL,CONFIG=configs/exp2_norm_aux_gqa.yaml scripts/run_ablation_gqa_a100_80g.slurm
+```
+
+For query-conditioned scoring, rebuild the query cache once:
+
+```bash
+sbatch --export=ALL,CONFIG=configs/exp4_query_gqa.yaml,BUILD_CACHE=1 scripts/run_ablation_gqa_a100_80g.slurm
+```
+
+After the jobs finish, extract recovery ratios from Slurm logs with:
+
+```bash
+python scripts/13_extract_recovery.py outputs/slurm/exp*_*.out
+```
+
 ## Sweeps
 
 Layer sweep:

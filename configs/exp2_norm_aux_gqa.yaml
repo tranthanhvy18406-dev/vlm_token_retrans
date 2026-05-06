@@ -8,8 +8,8 @@ model:
   layer_idx: 12
 
 data:
-  train_jsonl: data/gqa_mini.jsonl
-  val_jsonl: data/gqa_mini.jsonl
+  train_jsonl: data/gqa_train1000.jsonl
+  test_jsonl: data/gqa_test300.jsonl
   image_root: ""
   max_samples: 1000
 
@@ -23,14 +23,14 @@ oracle:
   target: teacher_kl
   max_candidates_per_sample: 128
   candidate_chunk_size: 16
-  save_dir: outputs/oracle_cache/train_teacher
+  save_dir: outputs/oracle_cache/gqa_teacher_train1000
 
 scorer:
   type: mlp
-  aux_mode: legacy
+  aux_mode: norm_stats
   pos_fourier_bands: 0
   hidden_dim: 4096
-  aux_dim: 4
+  aux_dim: 5
   hidden1: 1024
   hidden2: 256
   dropout: 0.1
@@ -40,10 +40,13 @@ train:
   lr: 1.0e-4
   weight_decay: 1.0e-4
   pairs_per_sample: 2048
+  rank_loss: pairwise
   list_loss_weight: 0.2
+  list_loss_tau: 0.1
   grad_clip: 1.0
-  checkpoint_path: outputs/checkpoints/mlp_scorer_teacher.pt
+  checkpoint_path: outputs/checkpoints/exp2_norm_aux_gqa.pt
 
 eval:
   metric: teacher_kl
   budgets: [16, 32, 64]
+  mlp_mmr_lambdas: [0.05, 0.1, 0.15, 0.2]

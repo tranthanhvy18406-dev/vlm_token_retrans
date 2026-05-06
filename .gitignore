@@ -11,6 +11,7 @@ data/gqa_images/
 outputs/oracle_cache/**/*.pt
 outputs/checkpoints/**/*.pt
 outputs/sweep_configs/
+outputs/sweep_configs_train_test/
 outputs/logs/*
 outputs/slurm/*
 !outputs/oracle_cache/.gitkeep

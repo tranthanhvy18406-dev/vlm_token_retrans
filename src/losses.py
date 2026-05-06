@@ -49,6 +49,70 @@ def listwise_kl_loss(
     if scores.numel() < 2:
         return scores.sum() * 0.0
 
-    target = torch.softmax(gains.float() / tau, dim=0)
+    gains = gains.float()
+    gains = (gains - gains.mean()) / (gains.std(unbiased=False) + 1.0e-6)
+    target = torch.softmax(gains / tau, dim=0)
     pred_log = torch.log_softmax(scores.float(), dim=0)
-    return F.kl_div(pred_log, target, reduction="batchmean")
+    return F.kl_div(pred_log, target, reduction="sum")
+
+
+def weighted_pairwise_ranking_loss(
+    scores: torch.Tensor,
+    gains: torch.Tensor,
+    pairs_per_sample: int = 4096,
+    top_frac: float = 0.5,
+    min_gain_gap: float = 1.0e-6,
+) -> torch.Tensor:
+    """
+    Gain-gap weighted pairwise loss with half of pairs anchored in the high-gain region.
+    """
+    device = scores.device
+    num_items = scores.numel()
+
+    if num_items < 2:
+        return scores.sum() * 0.0
+
+    half_pairs = max(pairs_per_sample // 2, 1)
+    top_n = max(2, int(num_items * top_frac))
+    top_n = min(top_n, num_items)
+    top_idx = torch.topk(gains, k=top_n).indices
+
+    idx_i_top = top_idx[torch.randint(0, top_n, (half_pairs,), device=device)]
+    idx_j_top = torch.randint(0, num_items, (half_pairs,), device=device)
+    idx_i_rand = torch.randint(0, num_items, (half_pairs,), device=device)
+    idx_j_rand = torch.randint(0, num_items, (half_pairs,), device=device)
+
+    idx_i = torch.cat([idx_i_top, idx_i_rand], dim=0)
+    idx_j = torch.cat([idx_j_top, idx_j_rand], dim=0)
+
+    diff_gain = gains[idx_i] - gains[idx_j]
+    valid = diff_gain.abs() > min_gain_gap
+    if valid.sum() == 0:
+        return scores.sum() * 0.0
+
+    idx_i = idx_i[valid]
+    idx_j = idx_j[valid]
+    diff_gain = diff_gain[valid]
+
+    sign = torch.sign(diff_gain)
+    score_diff = scores[idx_i] - scores[idx_j]
+
+    weight = diff_gain.abs()
+    weight = weight / (weight.mean() + 1.0e-6)
+    return (weight * F.softplus(-sign * score_diff)).mean()
+
+
+def topk_ce_loss(scores: torch.Tensor, gains: torch.Tensor, k: int = 32) -> torch.Tensor:
+    """
+    Cross-entropy against a uniform distribution over the oracle top-k items.
+    """
+    num_items = scores.numel()
+    if num_items < 2:
+        return scores.sum() * 0.0
+
+    k = min(int(k), num_items)
+    top = torch.topk(gains, k=k).indices
+    target = torch.zeros_like(scores, dtype=torch.float32)
+    target[top] = 1.0 / k
+    logp = torch.log_softmax(scores.float(), dim=0)
+    return -(target * logp).sum()

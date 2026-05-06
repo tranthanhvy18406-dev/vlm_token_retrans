@@ -26,6 +26,9 @@ oracle:
   save_dir: outputs/oracle_cache/gqa_teacher_train1000
 
 scorer:
+  type: mlp
+  aux_mode: legacy
+  pos_fourier_bands: 0
   hidden_dim: 4096
   aux_dim: 4
   hidden1: 1024

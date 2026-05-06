@@ -14,6 +14,102 @@ Last updated: 2026-04-30
 - Scorer input: `h_i^l` plus `[x_i, y_i, r_i, m_i]`
 - Scorer target: rank damaged tokens by retransmission value
 
+## Scorer Ablation Plan Added on 2026-05-04
+
+Implementation changes:
+
+```text
+Exp-1: old MLP + fixed listwise KL reduction
+Exp-2: Exp-1 + hidden norm/mean/std aux features
+Exp-3: Exp-2 checkpoint + MMR lambda sweep at eval only
+Exp-4: Exp-2 + query-conditioned scorer using last prompt-token hidden
+Exp-5: Exp-4 checkpoint + MMR lambda sweep at eval only
+```
+
+Configs and runner:
+
+```text
+configs/exp1_fixed_listwise_gqa.yaml
+configs/exp2_norm_aux_gqa.yaml
+configs/exp4_query_gqa.yaml
+scripts/run_ablation_gqa_a100_80g.slurm
+```
+
+The query cache is stored separately under:
+
+```text
+outputs/oracle_cache/gqa_teacher_train1000_query
+```
+
+## Scorer Ablation Results on 2026-05-05
+
+All runs below evaluate `data/gqa_test300.jsonl` with 300 samples and teacher-KL
+recovery. L40S and A40 replicated the same trend; L40S numbers are listed first.
+
+Previous baseline from the main POC:
+
+```text
+Old MLP: K=16 23.37%, K=32 41.15%, K=64 65.49%
+```
+
+L40S ablation:
+
+```text
+Exp-1 fixed listwise:
+K=16 12.11%, K=32 27.64%, K=64 54.44%
+
+Exp-2 fixed listwise + norm aux:
+K=16 13.22%, K=32 30.28%, K=64 56.77%
+
+Exp-3 Exp-2 + best MMR:
+K=16 13.46% at lambda=0.2
+K=32 30.64% at lambda=0.2
+K=64 57.04% at lambda=0.15
+
+Exp-4 query-conditioned:
+K=16 19.00%, K=32 35.92%, K=64 61.51%
+
+Exp-5 query-conditioned + best MMR:
+K=16 19.43% at lambda=0.15
+K=32 36.19% at lambda=0.05
+K=64 61.70% at lambda=0.2
+```
+
+A40 replication:
+
+```text
+Exp-1 fixed listwise:
+K=16 12.10%, K=32 27.71%, K=64 54.55%
+
+Exp-2 fixed listwise + norm aux:
+K=16 12.90%, K=32 29.55%, K=64 56.61%
+
+Exp-3 Exp-2 + best MMR:
+K=16 13.37% at lambda=0.2
+K=32 30.25% at lambda=0.2
+K=64 57.03% at lambda=0.2
+
+Exp-4 query-conditioned:
+K=16 19.81%, K=32 35.91%, K=64 62.15%
+
+Exp-5 query-conditioned + best MMR:
+K=16 20.10% at lambda=0.1
+K=32 35.98% at lambda=0.15
+K=64 62.09% at lambda=0.05
+```
+
+Interpretation:
+
+```text
+1. Fixed listwise KL alone hurt badly versus Old MLP.
+2. Hidden norm aux recovers a small amount but remains well below Old MLP.
+3. MMR gives small positive deltas on top of Exp-2/Exp-4, but not enough to beat Old MLP.
+4. Query-conditioned scorer is the strongest new component, especially over Exp-2,
+   but this implementation still does not beat the Old MLP baseline.
+5. Best current ablation is query-conditioned with or without MMR depending on K,
+   but Old MLP remains better at K=16/32/64.
+```
+
 ## Target Definition
 
 The original ground-truth CE oracle was:

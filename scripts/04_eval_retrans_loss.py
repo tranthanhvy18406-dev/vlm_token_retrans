@@ -3,15 +3,17 @@ import os
 import sys
 
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.corruption import corrupt_image_features
 from src.dataset import load_jsonl
+from src.features import aux_dim_for_mode, build_aux_features
 from src.llava_wrapper import LlavaRetransWrapper
 from src.metrics import recovery_ratio
-from src.scorer import MLPRetransScorer
+from src.scorer import build_scorer_from_config, scorer_requires_query
 from src.utils import get_torch_dtype, load_yaml, make_2d_positions, mean_or_nan, set_seed
 
 
@@ -62,19 +64,126 @@ def choose_hidden_norm(hidden, candidates, k):
     return candidates[torch.topk(scores, k=k).indices]
 
 
-def choose_mlp(scorer, hidden, pos, reliability, damaged_float, candidates, k):
-    h = hidden[candidates].float()
-    aux = torch.cat(
-        [
-            pos[candidates].float(),
-            reliability[candidates].float(),
-            damaged_float[candidates].float(),
-        ],
-        dim=-1,
+def build_scorer_aux(hidden, pos, reliability, damaged_float, candidates, scorer_cfg):
+    aux_mode = scorer_cfg.get("aux_mode", "legacy")
+    pos_fourier_bands = int(scorer_cfg.get("pos_fourier_bands", 0))
+    aux = build_aux_features(
+        hidden=hidden,
+        pos=pos,
+        reliability=reliability,
+        damaged_float=damaged_float,
+        selection=candidates,
+        mode=aux_mode,
+        pos_fourier_bands=pos_fourier_bands,
     )
-    scores = scorer(h, aux)
+    expected_aux_dim = int(scorer_cfg["aux_dim"])
+    actual_aux_dim = aux.size(-1)
+    inferred_aux_dim = aux_dim_for_mode(aux_mode, pos_fourier_bands)
+    if actual_aux_dim != expected_aux_dim or inferred_aux_dim != expected_aux_dim:
+        raise RuntimeError(
+            "Aux dimension mismatch: "
+            f"config={expected_aux_dim}, actual={actual_aux_dim}, inferred={inferred_aux_dim}. "
+            f"mode={aux_mode}, pos_fourier_bands={pos_fourier_bands}"
+        )
+    return aux
+
+
+def score_mlp_candidates(
+    scorer,
+    hidden,
+    pos,
+    reliability,
+    damaged_float,
+    candidates,
+    scorer_cfg,
+    query_hidden=None,
+):
+    h = hidden[candidates].float()
+    aux = build_scorer_aux(
+        hidden=hidden,
+        pos=pos,
+        reliability=reliability,
+        damaged_float=damaged_float,
+        candidates=candidates,
+        scorer_cfg=scorer_cfg,
+    )
+    with torch.no_grad():
+        scores = scorer(h, aux, q=query_hidden)
+    return scores
+
+
+def choose_mlp(
+    scorer,
+    hidden,
+    pos,
+    reliability,
+    damaged_float,
+    candidates,
+    k,
+    scorer_cfg,
+    query_hidden=None,
+):
+    scores = score_mlp_candidates(
+        scorer=scorer,
+        hidden=hidden,
+        pos=pos,
+        reliability=reliability,
+        damaged_float=damaged_float,
+        candidates=candidates,
+        scorer_cfg=scorer_cfg,
+        query_hidden=query_hidden,
+    )
     k = min(k, candidates.numel())
     return candidates[torch.topk(scores, k=k).indices]
+
+
+def choose_mlp_mmr(
+    scorer,
+    hidden,
+    pos,
+    reliability,
+    damaged_float,
+    candidates,
+    k,
+    scorer_cfg,
+    query_hidden=None,
+    lam=0.15,
+):
+    scores = score_mlp_candidates(
+        scorer=scorer,
+        hidden=hidden,
+        pos=pos,
+        reliability=reliability,
+        damaged_float=damaged_float,
+        candidates=candidates,
+        scorer_cfg=scorer_cfg,
+        query_hidden=query_hidden,
+    )
+    h_norm = F.normalize(hidden[candidates].float(), dim=-1)
+
+    selected = []
+    remaining = torch.arange(candidates.numel(), device=candidates.device)
+
+    for _ in range(min(k, candidates.numel())):
+        if not selected:
+            chosen = remaining[torch.argmax(scores[remaining])]
+        else:
+            selected_tensor = torch.stack(selected)
+            sim = h_norm[remaining] @ h_norm[selected_tensor].T
+            redundancy = sim.max(dim=1).values
+            mmr_score = scores[remaining] - lam * redundancy
+            chosen = remaining[torch.argmax(mmr_score)]
+
+        selected.append(chosen)
+        remaining = remaining[remaining != chosen]
+
+        if remaining.numel() == 0:
+            break
+
+    if not selected:
+        return candidates[:0]
+    selected_tensor = torch.stack(selected)
+    return candidates[selected_tensor]
 
 
 def compute_metric_from_image_features(
@@ -243,11 +352,11 @@ def choose_greedy_set_oracle(
     return selected_by_budget
 
 
-def make_stats(budgets):
+def make_stats(budgets, method_names, retransmission_method_names):
     stats = {}
     for k in budgets:
-        stats[k] = {name: [] for name in METHOD_NAMES}
-        for name in RETRANSMISSION_METHODS:
+        stats[k] = {name: [] for name in method_names}
+        for name in retransmission_method_names:
             stats[k][f"{name}__full"] = []
             stats[k][f"{name}__no"] = []
     return stats
@@ -262,7 +371,14 @@ def append_losses(stats, k, loss_full, loss_no, losses):
         stats[k][f"{name}__no"].append(float(loss_no.item()))
 
 
-def print_stats_block(title, stats, budgets, metric_name):
+def print_stats_block(
+    title,
+    stats,
+    budgets,
+    metric_name,
+    method_names,
+    retransmission_method_names,
+):
     sample_count = len(stats[budgets[0]]["full"]) if budgets else 0
     metric_label = "teacher KL" if metric_name == "teacher_kl" else "GT CE loss"
     print(f"\n===== {title} (n={sample_count}), lower {metric_label} is better =====")
@@ -274,13 +390,13 @@ def print_stats_block(title, stats, budgets, metric_name):
         print(f"\nK={k}")
         full_mean = mean_or_nan(stats[k]["full"])
         no_mean = mean_or_nan(stats[k]["no"])
-        for name in METHOD_NAMES:
+        for name in method_names:
             values = stats[k][name]
             if values:
                 mean_val = mean_or_nan(values)
                 print(f"{name:14s}: {mean_val:.6f} (n={len(values)})")
         print("Recovery ratios:")
-        for name in RETRANSMISSION_METHODS:
+        for name in retransmission_method_names:
             if not stats[k][name]:
                 continue
             method_mean = mean_or_nan(stats[k][name])
@@ -296,6 +412,17 @@ def parse_int_set(value: str) -> set[int]:
     return {int(item.strip()) for item in value.split(",") if item.strip()}
 
 
+def parse_float_list(value: str | None) -> list[float]:
+    if not value:
+        return []
+    return [float(item.strip()) for item in value.split(",") if item.strip()]
+
+
+def format_mmr_method_name(lam: float) -> str:
+    value = f"{lam:g}".replace(".", "p").replace("-", "m")
+    return f"mlp_mmr_{value}"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
@@ -306,6 +433,11 @@ def main():
     parser.add_argument("--greedy_max_samples", type=int, default=30)
     parser.add_argument("--greedy_candidate_limit", type=int, default=96)
     parser.add_argument("--greedy_budgets", default="64")
+    parser.add_argument(
+        "--mlp_mmr_lambdas",
+        default=None,
+        help="Comma-separated lambda values for MLP+MMR reranking, e.g. 0.05,0.1,0.15,0.2.",
+    )
     args = parser.parse_args()
 
     cfg = load_yaml(args.config)
@@ -322,13 +454,7 @@ def main():
         device_map=cfg["model"].get("device_map"),
     )
 
-    scorer = MLPRetransScorer(
-        hidden_dim=cfg["scorer"]["hidden_dim"],
-        aux_dim=cfg["scorer"]["aux_dim"],
-        hidden1=cfg["scorer"]["hidden1"],
-        hidden2=cfg["scorer"]["hidden2"],
-        dropout=0.0,
-    ).to(device)
+    scorer = build_scorer_from_config(cfg, dropout=0.0).to(device)
 
     ckpt = torch.load(args.checkpoint, map_location=device)
     scorer.load_state_dict(ckpt["model"])
@@ -344,11 +470,20 @@ def main():
 
     budgets = cfg["eval"]["budgets"]
     greedy_budgets = parse_int_set(args.greedy_budgets) & set(budgets)
+    if args.mlp_mmr_lambdas is None:
+        mmr_lambdas = [float(value) for value in cfg.get("eval", {}).get("mlp_mmr_lambdas", [])]
+    else:
+        mmr_lambdas = parse_float_list(args.mlp_mmr_lambdas)
+    mmr_method_names = [format_mmr_method_name(lam) for lam in mmr_lambdas]
+    method_names = METHOD_NAMES + mmr_method_names
+    retransmission_method_names = RETRANSMISSION_METHODS + mmr_method_names
     eval_metric = normalize_metric_name(
         cfg.get("eval", {}).get("metric", cfg["oracle"].get("target", "gt_ce"))
     )
     layer_idx = cfg["model"]["layer_idx"]
     print(f"eval metric: {eval_metric}")
+    if mmr_lambdas:
+        print(f"MLP+MMR lambdas: {mmr_lambdas}")
     if args.enable_greedy_oracle:
         print(
             "greedy oracle enabled: "
@@ -357,9 +492,9 @@ def main():
             f"budgets={sorted(greedy_budgets)}"
         )
 
-    stats_all = make_stats(budgets)
-    stats_vs = make_stats(budgets)
-    stats_other = make_stats(budgets)
+    stats_all = make_stats(budgets, method_names, retransmission_method_names)
+    stats_vs = make_stats(budgets, method_names, retransmission_method_names)
+    stats_other = make_stats(budgets, method_names, retransmission_method_names)
 
     for sample_idx, sample in enumerate(tqdm(samples, desc="eval retrans loss")):
         try:
@@ -377,11 +512,19 @@ def main():
             if candidates.numel() == 0:
                 continue
 
-            hidden = wrapper.get_layer_visual_hidden(
-                prepared=prepared,
-                image_features=corrupted,
-                layer_idx=layer_idx,
-            )
+            query_hidden = None
+            if scorer_requires_query(cfg["scorer"]):
+                hidden, query_hidden = wrapper.get_layer_visual_and_query_hidden(
+                    prepared=prepared,
+                    image_features=corrupted,
+                    layer_idx=layer_idx,
+                )
+            else:
+                hidden = wrapper.get_layer_visual_hidden(
+                    prepared=prepared,
+                    image_features=corrupted,
+                    layer_idx=layer_idx,
+                )
 
             num_tokens = full.shape[1]
             pos = make_2d_positions(num_tokens, device=device)
@@ -458,6 +601,8 @@ def main():
                     damaged_float=damaged_float,
                     candidates=candidates,
                     k=k,
+                    scorer_cfg=cfg["scorer"],
+                    query_hidden=query_hidden,
                 )
                 idx_oracle_single = oracle_ranked[: min(k, oracle_ranked.numel())]
 
@@ -491,6 +636,26 @@ def main():
                         teacher_log_probs,
                     ),
                 }
+                for lam, method_name in zip(mmr_lambdas, mmr_method_names):
+                    idx_mlp_mmr = choose_mlp_mmr(
+                        scorer=scorer,
+                        hidden=hidden,
+                        pos=pos,
+                        reliability=reliability,
+                        damaged_float=damaged_float,
+                        candidates=candidates,
+                        k=k,
+                        scorer_cfg=cfg["scorer"],
+                        query_hidden=query_hidden,
+                        lam=lam,
+                    )
+                    losses[method_name] = compute_metric_from_image_features(
+                        wrapper,
+                        prepared,
+                        restore_by_indices(corrupted, full, idx_mlp_mmr),
+                        eval_metric,
+                        teacher_log_probs,
+                    )
                 if k in greedy_by_budget:
                     losses["oracle_greedy"] = compute_metric_from_image_features(
                         wrapper,
@@ -510,9 +675,30 @@ def main():
             print(f"[WARN] eval sample failed: {exc}")
             continue
 
-    print_stats_block("All samples", stats_all, budgets, eval_metric)
-    print_stats_block("Vision-sensitive samples: full_metric < no_metric", stats_vs, budgets, eval_metric)
-    print_stats_block("Other samples: full_metric >= no_metric", stats_other, budgets, eval_metric)
+    print_stats_block(
+        "All samples",
+        stats_all,
+        budgets,
+        eval_metric,
+        method_names,
+        retransmission_method_names,
+    )
+    print_stats_block(
+        "Vision-sensitive samples: full_metric < no_metric",
+        stats_vs,
+        budgets,
+        eval_metric,
+        method_names,
+        retransmission_method_names,
+    )
+    print_stats_block(
+        "Other samples: full_metric >= no_metric",
+        stats_other,
+        budgets,
+        eval_metric,
+        method_names,
+        retransmission_method_names,
+    )
 
 
 if __name__ == "__main__":

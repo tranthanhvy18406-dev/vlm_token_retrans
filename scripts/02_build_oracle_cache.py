@@ -92,7 +92,7 @@ def main():
                 )
                 base_metric_name = "teacher_kl"
 
-            visual_hidden = wrapper.get_layer_visual_hidden(
+            visual_hidden, query_hidden = wrapper.get_layer_visual_and_query_hidden(
                 prepared=prepared,
                 image_features=corrupted_features,
                 layer_idx=layer_idx,
@@ -149,6 +149,8 @@ def main():
                 "oracle_target": oracle_target,
                 "base_metric_name": base_metric_name,
                 "hidden": visual_hidden.detach().cpu().to(torch.float16),
+                "query_hidden": query_hidden.detach().cpu().to(torch.float16),
+                "query_position": prepared.prompt_ids.shape[1] - 1,
                 "damaged_mask": damaged_mask.detach().cpu(),
                 "reliability": reliability.detach().cpu().to(torch.float16),
                 "damaged_float": damaged_float.detach().cpu().to(torch.float16),

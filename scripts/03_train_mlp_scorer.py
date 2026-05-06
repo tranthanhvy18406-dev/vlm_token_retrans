@@ -8,9 +8,15 @@ from tqdm import tqdm
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.losses import listwise_kl_loss, pairwise_ranking_loss
+from src.features import aux_dim_for_mode, build_aux_features
+from src.losses import (
+    listwise_kl_loss,
+    pairwise_ranking_loss,
+    topk_ce_loss,
+    weighted_pairwise_ranking_loss,
+)
 from src.metrics import ndcg_at_k, recall_at_k
-from src.scorer import MLPRetransScorer
+from src.scorer import build_scorer_from_config, scorer_requires_query
 from src.utils import ensure_dir, load_yaml, set_seed
 
 
@@ -21,7 +27,7 @@ def load_cache_paths(cache_dir: str):
     return paths
 
 
-def build_candidate_tensors(cache, device):
+def build_candidate_tensors(cache, device, scorer_cfg):
     hidden = cache["hidden"].to(device=device, dtype=torch.float32)
     pos = cache["pos"].to(device=device, dtype=torch.float32)
     reliability = cache["reliability"].to(device=device, dtype=torch.float32)
@@ -32,17 +38,60 @@ def build_candidate_tensors(cache, device):
     valid = damaged_mask & torch.isfinite(oracle_gain)
 
     h = hidden[valid]
-    aux = torch.cat(
-        [
-            pos[valid],
-            reliability[valid],
-            damaged_float[valid],
-        ],
-        dim=-1,
+    aux_mode = scorer_cfg.get("aux_mode", "legacy")
+    pos_fourier_bands = int(scorer_cfg.get("pos_fourier_bands", 0))
+    aux = build_aux_features(
+        hidden=hidden,
+        pos=pos,
+        reliability=reliability,
+        damaged_float=damaged_float,
+        selection=valid,
+        mode=aux_mode,
+        pos_fourier_bands=pos_fourier_bands,
     )
-    gains = oracle_gain[valid]
+    expected_aux_dim = int(scorer_cfg["aux_dim"])
+    actual_aux_dim = aux.size(-1)
+    inferred_aux_dim = aux_dim_for_mode(aux_mode, pos_fourier_bands)
+    if actual_aux_dim != expected_aux_dim or inferred_aux_dim != expected_aux_dim:
+        raise RuntimeError(
+            "Aux dimension mismatch: "
+            f"config={expected_aux_dim}, actual={actual_aux_dim}, inferred={inferred_aux_dim}. "
+            f"mode={aux_mode}, pos_fourier_bands={pos_fourier_bands}"
+        )
 
-    return h, aux, gains
+    gains = oracle_gain[valid]
+    query_hidden = None
+    if scorer_requires_query(scorer_cfg):
+        if "query_hidden" not in cache:
+            raise RuntimeError("query_hidden missing from cache. Rebuild cache with current code.")
+        query_hidden = cache["query_hidden"].to(device=device, dtype=torch.float32)
+
+    return h, aux, gains, query_hidden
+
+
+def compute_rank_loss(scores, gains, cfg, pairs_per_sample):
+    rank_loss_name = cfg["train"].get("rank_loss", "pairwise")
+    if rank_loss_name == "pairwise":
+        return pairwise_ranking_loss(
+            scores=scores,
+            gains=gains,
+            pairs_per_sample=pairs_per_sample,
+        )
+    if rank_loss_name == "weighted_pairwise":
+        return weighted_pairwise_ranking_loss(
+            scores=scores,
+            gains=gains,
+            pairs_per_sample=pairs_per_sample,
+            top_frac=float(cfg["train"].get("pairwise_top_frac", 0.5)),
+        )
+    raise ValueError(f"Unsupported train.rank_loss: {rank_loss_name}")
+
+
+def add_topk_losses(loss, scores, gains, cfg):
+    topk_weights = cfg["train"].get("topk_ce_weights", {}) or {}
+    for k_value, weight in topk_weights.items():
+        loss = loss + float(weight) * topk_ce_loss(scores=scores, gains=gains, k=int(k_value))
+    return loss
 
 
 def main():
@@ -57,13 +106,7 @@ def main():
     cache_dir = cfg["oracle"]["save_dir"]
     paths = load_cache_paths(cache_dir)
 
-    scorer = MLPRetransScorer(
-        hidden_dim=cfg["scorer"]["hidden_dim"],
-        aux_dim=cfg["scorer"]["aux_dim"],
-        hidden1=cfg["scorer"]["hidden1"],
-        hidden2=cfg["scorer"]["hidden2"],
-        dropout=cfg["scorer"]["dropout"],
-    ).to(device)
+    scorer = build_scorer_from_config(cfg).to(device)
 
     optimizer = torch.optim.AdamW(
         scorer.parameters(),
@@ -87,21 +130,22 @@ def main():
 
         for idx in tqdm(perm, desc=f"epoch {epoch}"):
             cache = torch.load(paths[idx], map_location="cpu")
-            h, aux, gains = build_candidate_tensors(cache, device)
+            h, aux, gains, query_hidden = build_candidate_tensors(cache, device, cfg["scorer"])
 
             if h.size(0) < 4:
                 continue
 
-            scores = scorer(h, aux)
+            scores = scorer(h, aux, q=query_hidden)
 
-            loss_rank = pairwise_ranking_loss(
+            loss_rank = compute_rank_loss(scores, gains, cfg, pairs_per_sample)
+
+            loss_list = listwise_kl_loss(
                 scores=scores,
                 gains=gains,
-                pairs_per_sample=pairs_per_sample,
+                tau=float(cfg["train"].get("list_loss_tau", 0.1)),
             )
-
-            loss_list = listwise_kl_loss(scores=scores, gains=gains)
             loss = loss_rank + list_w * loss_list
+            loss = add_topk_losses(loss, scores, gains, cfg)
 
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -124,11 +168,15 @@ def main():
         with torch.no_grad():
             for path in paths[: min(100, len(paths))]:
                 cache = torch.load(path, map_location="cpu")
-                h, aux, gains = build_candidate_tensors(cache, device)
+                h, aux, gains, query_hidden = build_candidate_tensors(
+                    cache,
+                    device,
+                    cfg["scorer"],
+                )
                 if h.size(0) < 4:
                     continue
 
-                scores = scorer(h, aux)
+                scores = scorer(h, aux, q=query_hidden)
                 recalls.append(recall_at_k(scores, gains, k=min(32, h.size(0))))
                 ndcgs.append(ndcg_at_k(scores, gains, k=min(32, h.size(0))))
 
