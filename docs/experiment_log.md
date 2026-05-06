@@ -216,6 +216,68 @@ Interpretation:
    for K=64. None of the robust variants dominates S5 across all budgets.
 ```
 
+## H0/H1 Follow-up
+
+H0 tests whether the S5 precision scorer and S7c attention/coverage scorer can
+be fused without retraining. The sweep uses held-out rows 501-700 from
+`data/gqa_train1000.jsonl` as a 200-sample validation split, then applies the
+validation-selected settings to `data/gqa_test300.jsonl`.
+
+```text
+H0 validation, S5 + S7c, fast no-oracle eval:
+K=16 best: fusion_a0p9 = 31.67%
+K=32 best: S7c / fusion_a0 = 48.47%
+K=64 best: S7c / fusion_a0 = 67.79%
+
+H0 test300, selected alphas:
+S5         : 23.64 / 44.83 / 64.70
+S7c        : 21.63 / 44.25 / 67.51
+fusion_a0p9: 23.82 / 44.79 / 65.27
+```
+
+Interpretation: simple score fusion and rank composition do not unlock much
+extra complementarity. The only positive result is a small K=16 gain from
+`alpha=0.9`; K=32 stays with S5 and K=64 stays with the attention/coverage
+scorer. This argues for budget-aware training/gating rather than a fixed
+post-hoc blend.
+
+H1 retrains the query-conditioned scorer on the S5 full-candidate cache. The
+S5 cache already contains `query_hidden` and full damaged-candidate oracle gains,
+so no new oracle cache build is needed.
+
+```text
+H1 configs:
+configs/h1a_fullcand_query_pairwise_gqa.yaml
+configs/h1b_fullcand_query_weak_listwise_005_gqa.yaml
+
+H1 test300, fast no-oracle eval:
+H1a query + pairwise only     : 25.59 / 45.97 / 67.59
+H1b query + weak listwise 0.005: 25.12 / 46.06 / 67.56
+```
+
+H1a was also compared directly against S7c in the same fast-eval run:
+
+```text
+H1a query : 25.59 / 45.97 / 67.63
+S7c attn  : 21.63 / 44.25 / 67.51
+fusion 0.5: 23.05 / 45.33 / 67.98
+```
+
+Interpretation:
+
+```text
+1. Full-candidate supervision makes query-conditioned scoring substantially
+   stronger. It is now the best small-budget scorer in these runs.
+2. Weak listwise still does not help query K=16; H1a pairwise-only is cleaner.
+   H1b has a tiny K=32 edge but not enough to justify using listwise by default.
+3. H1a also matches or slightly beats S7c at K=64 in the fast-eval protocol.
+   The only useful H1a/S7c fusion is K=64 alpha=0.5, +0.35 over H1a; K=16/K=32
+   should stay pure H1a.
+4. These H0/H1 numbers use the fast no-oracle evaluator, so compare them within
+   the same run/protocol. The official `04_eval_retrans_loss.py` table includes
+   random and oracle_single, which changes the RNG sequence for corruption masks.
+```
+
 ## Target Definition
 
 The original ground-truth CE oracle was:
