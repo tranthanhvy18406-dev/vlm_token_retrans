@@ -131,6 +131,8 @@ S2a: legacy aux + pairwise + weak listwise, tau=1.0, weight=0.005, KL/M
 S2b: legacy aux + pairwise + weak listwise, tau=1.0, weight=0.01, KL/M
 S3: legacy aux + weighted_pairwise + topK CE, no listwise
 S4: query-conditioned + norm_stats aux + weighted_pairwise + topK CE, no listwise
+S4b: query-conditioned + norm_stats aux + pairwise only
+S4c: query-conditioned + norm_stats aux + weak listwise, tau=1.0, weight=0.005, KL/M
 ```
 
 All runs below evaluate `data/gqa_test300.jsonl` with 300 samples and teacher-KL
@@ -155,6 +157,8 @@ MLP recovery:
 | S2b weak listwise 0.01 | 23.68% | 41.08% | 65.55% |
 | S3 weighted pairwise + topK CE | 21.03% | 35.23% | 59.89% |
 | S4 query + weighted pairwise + topK CE | 24.79% | 38.96% | 63.62% |
+| S4b query + pairwise only | 25.14% | 40.89% | 65.14% |
+| S4c query + weak listwise 0.005 | 25.22% | 40.78% | 64.89% |
 
 Training-side recall@32/ndcg@32 after epoch 4:
 
@@ -164,6 +168,8 @@ S2a: 0.3350 / 0.7196
 S2b: 0.3284 / 0.7167
 S3: 0.3675 / 0.7237
 S4: 0.3950 / 0.7667
+S4b: 0.3575 / 0.7398
+S4c: 0.3591 / 0.7405
 ```
 
 Interpretation:
@@ -177,11 +183,14 @@ Interpretation:
    versus S0, with K=64 essentially tied.
 3. Weighted pairwise + topK CE improves cache ranking metrics but hurts final
    teacher-KL retransmission recovery. Do not use S3 as the default objective.
-4. Query-conditioned scorer with the weighted/topK objective helps K=16 but
-   hurts K=32 and K=64. Query is still promising, but it should be retried on
-   the safer pairwise or weak-listwise objective instead of S4's objective.
-5. For the next default, use S2a if we want the strongest current legacy MLP;
-   otherwise S1/S0 are the conservative baselines.
+4. Query-conditioned scorer is real for small budgets: S4b/S4c reach the best
+   K=16 recovery in this round, about +1.2 to +1.7 points over S0/S2a.
+   However, it does not beat legacy weak-listwise at K=32 or K=64.
+5. Weak listwise does not help the query scorer in this setting: S4c is almost
+   tied with S4b at K=16 and slightly worse at K=32/64.
+6. For the next default, use S2a if the target is balanced K=16/32/64 recovery.
+   Use S4b only if the paper or system emphasizes very small retransmission
+   budgets such as K=16.
 ```
 
 ## Target Definition
