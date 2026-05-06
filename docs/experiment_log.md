@@ -160,6 +160,10 @@ MLP recovery:
 | S4b query + pairwise only | 25.14% | 40.89% | 65.14% |
 | S4c query + weak listwise 0.005 | 25.22% | 40.78% | 64.89% |
 | S5 full-candidate cache + weak listwise 0.005 | 25.17% | 42.81% | 65.85% |
+| S6 full-candidate + attention aux + weak listwise 0.005 | 23.85% | 41.16% | 69.01% |
+| S7a S6 + robust pairwise gap 0.02 | 24.77% | 41.99% | 68.61% |
+| S7b S6 + robust pairwise gap 0.05 | 24.13% | 41.65% | 68.87% |
+| S7c S6 + robust pairwise gap 0.10 | 24.04% | 41.52% | 69.11% |
 
 Training-side recall@32/ndcg@32 after epoch 4:
 
@@ -172,6 +176,10 @@ S4: 0.3950 / 0.7667
 S4b: 0.3575 / 0.7398
 S4c: 0.3591 / 0.7405
 S5: 0.1669 / 0.6629
+S6: 0.2097 / 0.6795
+S7a: 0.1969 / 0.6759
+S7b: 0.2044 / 0.6783
+S7c: 0.2075 / 0.6783
 ```
 
 Interpretation:
@@ -198,6 +206,14 @@ Interpretation:
    gives the best K=64 in this round. The low S5 cache recall@32 is expected
    because the candidate set is much larger than the 128-candidate cache; final
    retransmission recovery is the relevant metric.
+8. Attention aux changes the budget tradeoff. It hurts K=16 and K=32 versus
+   S5, but substantially improves K=64. S7c reaches the best K=64 recovery
+   in this round, close to the same-run oracle_single. This suggests attention
+   features are useful for broad coverage at larger retransmission budgets, but
+   need a budget-conditioned or hybrid head before they are safe as the default.
+9. Robust pairwise gives only small changes on top of attention aux. gap=0.02
+   is the best of the robust variants for K=16/K=32, while gap=0.10 is best
+   for K=64. None of the robust variants dominates S5 across all budgets.
 ```
 
 ## Target Definition
