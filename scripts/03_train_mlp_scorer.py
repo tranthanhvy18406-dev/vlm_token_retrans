@@ -144,6 +144,8 @@ def main():
                 gains=gains,
                 tau=float(cfg["train"].get("list_loss_tau", 0.1)),
             )
+            if bool(cfg["train"].get("list_loss_normalize_by_candidates", False)):
+                loss_list = loss_list / max(scores.numel(), 1)
             loss = loss_rank + list_w * loss_list
             loss = add_topk_losses(loss, scores, gains, cfg)
 
