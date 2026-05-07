@@ -1,6 +1,6 @@
 # VLM Token Retransmission Experiment Log
 
-Last updated: 2026-04-30
+Last updated: 2026-05-07
 
 ## Current Setup
 
@@ -276,6 +276,104 @@ Interpretation:
 4. These H0/H1 numbers use the fast no-oracle evaluator, so compare them within
    the same run/protocol. The official `04_eval_retrans_loss.py` table includes
    random and oracle_single, which changes the RNG sequence for corruption masks.
+```
+
+## P0 Official Paired H1 Evaluation on 2026-05-07
+
+P0 reruns S5, S7c, H1a, and H1b in one official paired evaluator so every method
+sees the same corruption mask per sample. It also reports random, hidden_norm,
+and oracle_single in the same loop. The paired script uses the same mean-loss
+recovery aggregation as `04_eval_retrans_loss.py`, and adds 1000-sample paired
+bootstrap CIs. S7c requires attention features, so this run uses
+`attn_implementation=eager` for all methods; compare methods within this run.
+
+```text
+script: scripts/15_eval_paired_scorers.py
+runner: scripts/run_paired_eval_l40s.slurm
+job: 33764351, L40S interruptible, completed in 01:51:53
+output: outputs/paired_eval/p0_h1_official_paired_test300_interruptible.json
+eval: data/gqa_test300.jsonl, 300 samples, teacher-KL, official aggregate recovery
+```
+
+All samples are vision-sensitive under teacher-KL in this run, so the All and
+Vision-sensitive tables are identical.
+
+| Method | K=16 | K=32 | K=64 |
+| - | -: | -: | -: |
+| random | 20.54% | 38.73% | 63.71% |
+| hidden_norm | 21.00% | 37.85% | 61.70% |
+| oracle_single | 47.19% | 58.29% | 70.98% |
+| S5 full-candidate legacy | 25.03% | 42.74% | 65.57% |
+| S7c attention coverage | 24.01% | 41.47% | 69.15% |
+| H1a full-candidate query pairwise | 26.07% | 41.28% | 65.46% |
+| H1b full-candidate query weak listwise | 26.12% | 41.44% | 65.24% |
+
+Key paired deltas:
+
+```text
+K=16:
+H1a - S5 = +1.04, CI95 [-0.10, +2.23]
+H1b - S5 = +1.09, CI95 [-0.05, +2.27]
+S7c - H1a = -2.06, CI95 [-3.65, -0.54]
+
+K=32:
+S5 - H1a = +1.46, CI95 [-0.33, +3.20]
+S7c - S5 = -1.27, CI95 [-3.46, +1.00]
+H1b - H1a = +0.15, CI95 [-0.07, +0.40]
+
+K=64:
+S7c - H1a = +3.69, CI95 [+1.21, +6.38]
+S7c - S5 = +3.58, CI95 [+1.56, +5.62]
+H1a - S5 = -0.11, CI95 [-2.14, +2.03]
+```
+
+Interpretation:
+
+```text
+1. Query-conditioned scoring is the best small-budget receiver-side scorer.
+   H1a/H1b are best at K=16, but the H1b weak-listwise edge over H1a is only
+   +0.05 and not meaningful. Use H1a as the clean pairwise-only query baseline.
+2. The official paired run does not support saying H1a dominates all budgets.
+   At K=32, S5 is numerically best, although its +1.46 over H1a still has a CI
+   crossing zero.
+3. S7c is the clear K=64 coverage scorer. Its +3.6 point gain over both H1a
+   and S5 has a positive paired CI.
+4. The next main direction should be budget-aware mixture/gating of query
+   precision and attention coverage, not another single global ranking head.
+```
+
+## H2 FiLM Query Follow-up
+
+H2a tests a FiLM-style query modulation scorer on the same full-candidate cache
+and pairwise-only objective as H1a.
+
+```text
+config: configs/h2a_film_query_pairwise_gqa.yaml
+checkpoint: outputs/checkpoints/h2a_film_query_pairwise_gqa.pt
+training job: 33764279
+
+epoch=0 loss=0.689101 recall@32=0.1244 ndcg@32=0.6514
+epoch=1 loss=0.685186 recall@32=0.1481 ndcg@32=0.6626
+epoch=2 loss=0.683019 recall@32=0.1462 ndcg@32=0.6646
+epoch=3 loss=0.680737 recall@32=0.1572 ndcg@32=0.6704
+epoch=4 loss=0.677548 recall@32=0.1963 ndcg@32=0.6850
+```
+
+Fast no-oracle eval against H1a:
+
+```text
+H1a query pairwise: 25.59 / 45.97 / 67.59
+H2a FiLM query   : 21.11 / 38.54 / 61.91
+fusion alpha=0.5 : 24.00 / 43.80 / 66.03
+```
+
+Interpretation:
+
+```text
+H2a is a negative result. This FiLM scorer is a full replacement trained from
+scratch, and it does not preserve H1a behavior. Do not run it in official eval.
+If FiLM is revisited, use it as a residual delta on top of an initialized H1a
+scorer rather than as a randomly initialized replacement.
 ```
 
 ## Target Definition
