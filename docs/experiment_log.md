@@ -460,6 +460,143 @@ Interpretation:
    explicit S7c-preserving term for K=64.
 ```
 
+## G1b Three-Expert Budget Gate on 2026-05-07
+
+G1b extends G1 by adding S5 as a third frozen expert. The three experts are:
+
+```text
+S5  = full-candidate legacy precision/medium-budget scorer
+H1a = full-candidate query-conditioned pairwise scorer
+S7c = attention-aux coverage scorer
+```
+
+The gate predicts a softmax over the z-scored expert scores:
+
+```text
+s_i(K) = w_s5_i(K) * z(S5_i) + w_h1a_i(K) * z(H1a_i) + w_s7c_i(K) * z(S7c_i)
+```
+
+The input includes the three expert scores, rank percentiles, score/rank
+agreement, pairwise expert score differences, each expert's aux features, query
+norm, damaged count, and budget ratio.
+
+```text
+config: configs/g1b_three_expert_gate_gqa.yaml
+train/eval runner: scripts/run_three_expert_gate_l40s.slurm
+training script: scripts/18_train_three_expert_gate.py
+eval script: scripts/19_eval_three_expert_gate.py
+job: 33768140, L40S interruptible, completed in 01:55:47
+checkpoint: outputs/checkpoints/g1b_three_expert_gate_gqa.pt
+output: outputs/budget_gate/g1b_official_paired_test300_interruptible.json
+```
+
+Training diagnostics:
+
+```text
+epoch=0 loss=0.766148 w@16=[s5:0.247,h1a:0.323,s7c:0.430] w@32=[s5:0.246,h1a:0.318,s7c:0.436] w@64=[s5:0.243,h1a:0.311,s7c:0.446]
+epoch=1 loss=0.748546 w@16=[s5:0.281,h1a:0.322,s7c:0.398] w@32=[s5:0.277,h1a:0.311,s7c:0.412] w@64=[s5:0.263,h1a:0.297,s7c:0.439]
+epoch=2 loss=0.745632 w@16=[s5:0.279,h1a:0.327,s7c:0.394] w@32=[s5:0.274,h1a:0.314,s7c:0.412] w@64=[s5:0.260,h1a:0.292,s7c:0.449]
+epoch=3 loss=0.742978 w@16=[s5:0.270,h1a:0.336,s7c:0.394] w@32=[s5:0.266,h1a:0.319,s7c:0.414] w@64=[s5:0.252,h1a:0.293,s7c:0.454]
+epoch=4 loss=0.742187 w@16=[s5:0.268,h1a:0.340,s7c:0.393] w@32=[s5:0.265,h1a:0.324,s7c:0.411] w@64=[s5:0.253,h1a:0.296,s7c:0.451]
+```
+
+The learned weights are only weakly budget-specific. S7c keeps the largest
+average weight even for K=16/K=32, while S5 never becomes dominant at K=32.
+
+Official paired eval on `data/gqa_test300.jsonl`:
+
+| Method | K=16 | K=32 | K=64 |
+| - | -: | -: | -: |
+| random | 20.54% | 38.73% | 63.71% |
+| hidden_norm | 21.00% | 37.85% | 61.70% |
+| oracle_single | 47.19% | 58.29% | 70.98% |
+| S5 full-candidate legacy | 25.03% | 42.74% | 65.57% |
+| S7c attention coverage | 24.01% | 41.47% | 69.15% |
+| H1a query pairwise | 26.07% | 41.28% | 65.46% |
+| G1 frozen budget gate | 26.68% | 42.36% | 68.02% |
+| G1b three-expert gate | 26.71% | 42.19% | 66.98% |
+
+Key paired deltas:
+
+```text
+K=16:
+G1b - H1a = +0.64, CI95 [-0.64, +2.01]
+G1b - S5  = +1.68, CI95 [+0.27, +3.07]
+G1b - S7c = +2.70, CI95 [+1.33, +4.29]
+
+K=32:
+G1b - H1a = +0.91, CI95 [-0.72, +2.30]
+G1b - S7c = +0.72, CI95 [-0.78, +2.32]
+G1b - S5  = -0.55, CI95 [-2.44, +1.37]
+
+K=64:
+G1b - H1a = +1.52, CI95 [-0.14, +3.19]
+G1b - S5  = +1.41, CI95 [-0.91, +3.56]
+G1b - S7c = -2.17, CI95 [-4.15, -0.40]
+```
+
+Interpretation:
+
+```text
+1. G1b is not an improvement over G1. It is essentially tied at K=16, slightly
+   lower at K=32, and clearly lower at K=64.
+2. Adding S5 as a third token-level expert did not recover S5's K=32 strength.
+   The learned softmax gate still fails to specialize sharply by budget.
+3. G1b remains useful as evidence that score-level expert fusion helps K=16, but
+   token-level softmax gating is not the right way to preserve each expert's
+   best budget.
+4. The fixed budget switch remains a stronger target: use H1a/G1 for K=16, S5
+   for K=32, and S7c for K=64 unless a learned gate can match those anchors.
+5. Next gate work should prefer sample-level or budget-scalar weights with a
+   strong validation-selected prior, not another wider token-level gate.
+```
+
+## G2a Query + Attention Aux Pairwise on 2026-05-07
+
+G2a tests the lowest-cost feature-level fusion variant: keep the H1a
+`QueryConditionedScorer` and pairwise-only objective, but train it on the
+full-candidate attention cache with `aux_mode=norm_attn` instead of
+`aux_mode=norm_stats`. This directly asks whether attention auxiliary features
+help when injected into the query scorer itself.
+
+```text
+config: configs/g2a_query_attn_pairwise_gqa.yaml
+runner: scripts/run_ablation_gqa_l40s.slurm
+training/eval script: scripts/03_train_mlp_scorer.py, scripts/04_eval_retrans_loss.py
+job: 33768192, L40S interruptible, completed in 01:51:33
+checkpoint: outputs/checkpoints/g2a_query_attn_pairwise_gqa.pt
+```
+
+Training diagnostics:
+
+```text
+epoch=0 loss=0.690341 recall@32=0.1497 ndcg@32=0.6501
+epoch=1 loss=0.686355 recall@32=0.1509 ndcg@32=0.6526
+epoch=2 loss=0.684549 recall@32=0.1822 ndcg@32=0.6723
+epoch=3 loss=0.682200 recall@32=0.1772 ndcg@32=0.6683
+epoch=4 loss=0.679175 recall@32=0.1669 ndcg@32=0.6668
+```
+
+Standard `04_eval_retrans_loss.py` eval on `data/gqa_test300.jsonl`:
+
+| Method | K=16 | K=32 | K=64 |
+| - | -: | -: | -: |
+| random | 20.52% | 38.77% | 63.73% |
+| hidden_norm | 20.98% | 37.88% | 61.70% |
+| oracle_single | 47.20% | 58.33% | 71.02% |
+| G2a query + attention aux | 25.92% | 41.25% | 64.80% |
+
+Interpretation:
+
+```text
+1. G2a is not worth promoting to an official paired eval. Its standard eval is
+   essentially tied with H1a at K=16/K=32 and worse at K=64.
+2. Directly appending norm_attn features to the query-conditioned scorer is not
+   a low-hanging improvement.
+3. Attention features remain useful as a separate coverage expert (S7c) or as
+   gate/context features, not as a simple aux expansion of H1a.
+```
+
 ## Target Definition
 
 The original ground-truth CE oracle was:

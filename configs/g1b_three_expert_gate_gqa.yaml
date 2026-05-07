@@ -1,0 +1,64 @@
+model:
+  name: /scratch/prj/nmes_simeone/xty_hf_models/llava-1.5-7b-hf-local
+  cache_dir: /scratch/prj/nmes_simeone/xty_hf_models
+  local_files_only: true
+  dtype: float16
+  device: cuda
+  device_map: auto
+  layer_idx: 12
+
+data:
+  train_jsonl: data/gqa_train1000.jsonl
+  test_jsonl: data/gqa_test300.jsonl
+  image_root: ""
+  max_samples: 1000
+
+corruption:
+  mode: erasure
+  drop_ratio: 0.5
+  mask_value: zero
+  seed: 42
+
+oracle:
+  target: teacher_kl
+  max_candidates_per_sample: 576
+  candidate_chunk_size: 16
+  save_dir: outputs/oracle_cache/gqa_teacher_train500_fullcand_attn_l2_l4_l8_l12
+
+gate:
+  type: three_expert_budget_gate
+  legacy_config: configs/s5_fullcand_weak_listwise_005_gqa.yaml
+  legacy_checkpoint: outputs/checkpoints/s5_fullcand_weak_listwise_005_gqa.pt
+  query_config: configs/h1a_fullcand_query_pairwise_gqa.yaml
+  query_checkpoint: outputs/checkpoints/h1a_fullcand_query_pairwise_gqa.pt
+  coverage_config: configs/s7c_attention_robust_gap010_gqa.yaml
+  coverage_checkpoint: outputs/checkpoints/s7c_attention_robust_gap010_gqa.pt
+  input_dim: 58
+  hidden1: 128
+  hidden2: 64
+  dropout: 0.1
+  max_budget: 64
+  num_visual_tokens: 576
+
+train:
+  epochs: 5
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  pairs_per_sample: 2048
+  pairwise_weight: 1.0
+  boundary_pairs_per_sample: 1024
+  boundary_loss_weights:
+    16: 0.05
+    32: 0.03
+    64: 0.02
+  budget_prior_loss_weight: 0.02
+  budget_prior_weights:
+    16: [0.2, 0.65, 0.15]
+    32: [0.45, 0.35, 0.2]
+    64: [0.15, 0.15, 0.7]
+  grad_clip: 1.0
+  checkpoint_path: outputs/checkpoints/g1b_three_expert_gate_gqa.pt
+
+eval:
+  metric: teacher_kl
+  budgets: [16, 32, 64]
