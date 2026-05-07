@@ -376,6 +376,90 @@ If FiLM is revisited, use it as a residual delta on top of an initialized H1a
 scorer rather than as a randomly initialized replacement.
 ```
 
+## G1 Frozen Budget Gate on 2026-05-07
+
+G1 tests the first budget-aware mixture direction. It freezes H1a as the query
+precision expert and S7c as the attention coverage expert, then trains a small
+token-level gate on the full-candidate attention cache. The final score is:
+
+```text
+s_i(K) = g_i(K) * z(H1a_i) + (1 - g_i(K)) * z(S7c_i)
+```
+
+Gate features include normalized H1a/S7c scores, rank percentiles, score/rank
+agreement, H1a norm_stats aux, S7c norm_attn aux, query norm, damaged count, and
+budget ratio. Training uses pairwise ranking plus weak top-K boundary terms.
+
+```text
+config: configs/g1_frozen_budget_gate_gqa.yaml
+train/eval runner: scripts/run_budget_gate_l40s.slurm
+training script: scripts/16_train_budget_gate.py
+eval script: scripts/17_eval_budget_gate.py
+job: 33765038, L40S interruptible, completed in 01:54:07
+checkpoint: outputs/checkpoints/g1_frozen_budget_gate_gqa.pt
+output: outputs/budget_gate/g1_official_paired_test300_interruptible.json
+```
+
+Training diagnostics:
+
+```text
+epoch=0 loss=0.772357 gate@16=0.458 gate@32=0.459 gate@64=0.460
+epoch=1 loss=0.760159 gate@16=0.467 gate@32=0.465 gate@64=0.461
+epoch=2 loss=0.756658 gate@16=0.463 gate@32=0.461 gate@64=0.454
+epoch=3 loss=0.754932 gate@16=0.465 gate@32=0.460 gate@64=0.452
+epoch=4 loss=0.753463 gate@16=0.467 gate@32=0.463 gate@64=0.456
+```
+
+The gate mean stays near 0.46 across budgets, so this first version did not
+learn a strong budget-specific routing policy. It still changes token rankings
+enough to improve some budgets.
+
+Official paired eval on `data/gqa_test300.jsonl`:
+
+| Method | K=16 | K=32 | K=64 |
+| - | -: | -: | -: |
+| random | 20.54% | 38.73% | 63.71% |
+| hidden_norm | 21.00% | 37.85% | 61.70% |
+| oracle_single | 47.19% | 58.29% | 70.98% |
+| S5 full-candidate legacy | 25.03% | 42.74% | 65.57% |
+| S7c attention coverage | 24.01% | 41.47% | 69.15% |
+| H1a query pairwise | 26.07% | 41.28% | 65.46% |
+| G1 frozen budget gate | 26.68% | 42.36% | 68.02% |
+
+Key paired deltas:
+
+```text
+K=16:
+G1 - H1a = +0.61, CI95 [-0.51, +1.79]
+G1 - S5  = +1.65, CI95 [+0.24, +3.18]
+G1 - S7c = +2.67, CI95 [+1.28, +4.04]
+
+K=32:
+G1 - H1a = +1.08, CI95 [-0.51, +2.58]
+G1 - S7c = +0.89, CI95 [-0.56, +2.37]
+G1 - S5  = -0.38, CI95 [-2.35, +1.57]
+
+K=64:
+G1 - H1a = +2.56, CI95 [+0.57, +4.66]
+G1 - S5  = +2.45, CI95 [+0.28, +4.64]
+G1 - S7c = -1.13, CI95 [-2.83, +0.50]
+```
+
+Interpretation:
+
+```text
+1. The mixture direction is useful. G1 is the best K=16 result so far and also
+   recovers most of the K=64 coverage gain over H1a/S5.
+2. G1 is not a final all-budget winner: it is still slightly below S5 at K=32
+   and below S7c at K=64.
+3. Since the learned gate averages are almost identical across K, the current
+   single-token oracle pairwise/boundary training is not enough to learn a strong
+   budget-specific expert switch.
+4. Next gate variants should either include S5 as a third expert, add a
+   budget-specific prior/regularizer, or train a residual adapter with an
+   explicit S7c-preserving term for K=64.
+```
+
 ## Target Definition
 
 The original ground-truth CE oracle was:

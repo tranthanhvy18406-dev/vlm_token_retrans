@@ -12,6 +12,9 @@ outputs/oracle_cache/**/*.pt
 outputs/checkpoints/**/*.pt
 outputs/sweep_configs/
 outputs/sweep_configs_train_test/
+outputs/budget_gate/
+outputs/fusion/
+outputs/paired_eval/
 outputs/logs/*
 outputs/slurm/*
 !outputs/oracle_cache/.gitkeep
