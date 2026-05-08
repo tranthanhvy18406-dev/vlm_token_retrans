@@ -297,7 +297,7 @@ def main() -> None:
 
             ref_scores = {}
             for spec in ref_specs:
-                ref_scores[spec.label] = paired.score_scorer_candidates(
+                ref_scores[spec.label] = paired.score_candidates(
                     spec=spec,
                     hidden=hidden,
                     pos=pos,
