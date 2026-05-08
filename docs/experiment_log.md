@@ -597,6 +597,43 @@ Interpretation:
    gate/context features, not as a simple aux expansion of H1a.
 ```
 
+## H1a-1000 Full-Candidate Query on 2026-05-08
+
+H1a-1000 keeps the H1a architecture and pairwise-only objective unchanged, but
+expands the full-candidate oracle cache from 500 to 1000 GQA training samples.
+The first 500 cache files are reused from `gqa_teacher_train500_fullcand`; the
+job only builds the additional 500 full-candidate oracle files.
+
+```text
+config: configs/h1a_fullcand_query_pairwise_gqa_1000.yaml
+cache: outputs/oracle_cache/gqa_teacher_train1000_fullcand
+checkpoint: outputs/checkpoints/h1a_fullcand_query_pairwise_gqa_1000.pt
+train/eval job: 33774282, L40S interruptible
+cache files: 1000 / 1000
+```
+
+Standard `04_eval_retrans_loss.py` eval on `data/gqa_test300.jsonl`:
+
+| Method | K=16 | K=32 | K=64 |
+| - | -: | -: | -: |
+| random | 20.64% | 38.71% | 63.75% |
+| hidden_norm | 21.15% | 37.98% | 62.04% |
+| oracle_single | 46.89% | 58.45% | 71.28% |
+| H1a-1000 query pairwise | 27.78% | 42.00% | 65.57% |
+
+Interpretation:
+
+```text
+1. H1a-1000 is promising for K=16. Its standard eval K=16 recovery is higher
+   than the previous H1a/G1/G1b numbers, but protocol differences mean this
+   should be verified in a paired official eval before updating the main table.
+2. K=32 is still below S5's official paired K=32 value, and K=64 is still below
+   S7c's coverage result. More data mainly appears to help small-budget query
+   precision, not all-budget coverage.
+3. Official paired eval was launched as job 33780831 with S5, S7c, H1a, and
+   H1a-1000 in the same loop.
+```
+
 ## Target Definition
 
 The original ground-truth CE oracle was:
