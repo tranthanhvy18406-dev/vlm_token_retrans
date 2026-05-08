@@ -158,8 +158,75 @@ class FiLMQueryScorer(nn.Module):
         return self.head(x).squeeze(-1)
 
 
+class SetQueryScorer(nn.Module):
+    """
+    Standalone query-conditioned set scorer.
+
+    Unlike the residual set experiment, this model does not consume scores from
+    any previous scorer. It projects each damaged candidate into a query-aware
+    token embedding, runs self-attention over the candidate set, and predicts a
+    scalar retransmission score for each candidate.
+    """
+
+    def __init__(
+        self,
+        hidden_dim: int = 4096,
+        proj_dim: int = 256,
+        aux_dim: int = 5,
+        d_model: int = 256,
+        nhead: int = 4,
+        layers: int = 1,
+        hidden1: int = 128,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+
+        self.v_ln = nn.LayerNorm(hidden_dim)
+        self.q_ln = nn.LayerNorm(hidden_dim)
+        self.v_proj = nn.Linear(hidden_dim, proj_dim)
+        self.q_proj = nn.Linear(hidden_dim, proj_dim)
+        self.input_proj = nn.Sequential(
+            nn.LayerNorm(proj_dim * 4 + aux_dim),
+            nn.Linear(proj_dim * 4 + aux_dim, d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+        )
+
+        layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=d_model * 2,
+            dropout=dropout,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(layer, num_layers=layers)
+        self.head = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, hidden1),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden1, 1),
+        )
+
+    def forward(self, h: torch.Tensor, aux: torch.Tensor, q: torch.Tensor) -> torch.Tensor:
+        if q is None:
+            raise ValueError("SetQueryScorer requires q.")
+        if q.dim() == 1:
+            q = q.unsqueeze(0)
+        q = q.to(device=h.device, dtype=h.dtype)
+
+        v = self.v_proj(self.v_ln(h))
+        q = self.q_proj(self.q_ln(q)).expand_as(v)
+        x = torch.cat([v, q, v * q, (v - q).abs(), aux.float()], dim=-1)
+        z = self.input_proj(x)
+        z = self.encoder(z.unsqueeze(0)).squeeze(0)
+        return self.head(z).squeeze(-1)
+
+
 def scorer_requires_query(scorer_cfg: dict) -> bool:
-    return scorer_cfg.get("type", "mlp") in {"query_conditioned", "film_query"}
+    return scorer_cfg.get("type", "mlp") in {"query_conditioned", "film_query", "set_query"}
 
 
 def build_scorer_from_config(cfg: dict, dropout: float | None = None) -> nn.Module:
@@ -195,6 +262,18 @@ def build_scorer_from_config(cfg: dict, dropout: float | None = None) -> nn.Modu
             hidden2=scorer_cfg.get("hidden2", 128),
             dropout=dropout_value,
             modulation_scale=scorer_cfg.get("modulation_scale", 0.1),
+        )
+
+    if scorer_type == "set_query":
+        return SetQueryScorer(
+            hidden_dim=scorer_cfg["hidden_dim"],
+            proj_dim=scorer_cfg.get("proj_dim", 256),
+            aux_dim=scorer_cfg["aux_dim"],
+            d_model=scorer_cfg.get("d_model", 256),
+            nhead=scorer_cfg.get("nhead", 4),
+            layers=scorer_cfg.get("layers", 1),
+            hidden1=scorer_cfg.get("hidden1", 128),
+            dropout=dropout_value,
         )
 
     raise ValueError(f"Unsupported scorer type: {scorer_type}")
