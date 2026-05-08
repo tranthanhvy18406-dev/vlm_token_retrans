@@ -13,6 +13,7 @@ from src.losses import (
     listwise_kl_loss,
     pairwise_ranking_loss,
     robust_pairwise_ranking_loss,
+    topk_boundary_pairwise_loss,
     topk_ce_loss,
     weighted_pairwise_ranking_loss,
 )
@@ -111,6 +112,24 @@ def add_topk_losses(loss, scores, gains, cfg):
     return loss
 
 
+def add_boundary_losses(loss, scores, gains, cfg):
+    boundary_weights = cfg["train"].get("boundary_loss_weights", {}) or {}
+    if not boundary_weights:
+        return loss
+
+    pairs_per_sample = int(cfg["train"].get("boundary_pairs_per_sample", 2048))
+    negative_multiplier = int(cfg["train"].get("boundary_negative_multiplier", 2))
+    for k_value, weight in boundary_weights.items():
+        loss = loss + float(weight) * topk_boundary_pairwise_loss(
+            scores=scores,
+            gains=gains,
+            k=int(k_value),
+            pairs_per_sample=pairs_per_sample,
+            negative_multiplier=negative_multiplier,
+        )
+    return loss
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
@@ -165,6 +184,7 @@ def main():
                 loss_list = loss_list / max(scores.numel(), 1)
             loss = loss_rank + list_w * loss_list
             loss = add_topk_losses(loss, scores, gains, cfg)
+            loss = add_boundary_losses(loss, scores, gains, cfg)
 
             optimizer.zero_grad(set_to_none=True)
             loss.backward()

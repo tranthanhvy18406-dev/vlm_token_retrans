@@ -151,3 +151,42 @@ def topk_ce_loss(scores: torch.Tensor, gains: torch.Tensor, k: int = 32) -> torc
     target[top] = 1.0 / k
     logp = torch.log_softmax(scores.float(), dim=0)
     return -(target * logp).sum()
+
+
+def topk_boundary_pairwise_loss(
+    scores: torch.Tensor,
+    gains: torch.Tensor,
+    k: int,
+    pairs_per_sample: int = 2048,
+    negative_multiplier: int = 2,
+) -> torch.Tensor:
+    """
+    Pairwise loss focused on the oracle top-k boundary.
+
+    Positives are oracle ranks [1, k]. Negatives are the near-boundary oracle
+    ranks [k + 1, negative_multiplier * k]. This avoids treating the full tail
+    ranking as equally important while also avoiding top-k CE's uniform target
+    over all selected tokens.
+    """
+    device = scores.device
+    num_items = scores.numel()
+    if num_items < 2:
+        return scores.sum() * 0.0
+
+    k = min(int(k), num_items - 1)
+    if k <= 0:
+        return scores.sum() * 0.0
+
+    boundary_end = min(max(int(negative_multiplier) * k, k + 1), num_items)
+    if boundary_end <= k:
+        return scores.sum() * 0.0
+
+    order = torch.argsort(gains.float(), descending=True)
+    positives = order[:k]
+    negatives = order[k:boundary_end]
+    if positives.numel() == 0 or negatives.numel() == 0:
+        return scores.sum() * 0.0
+
+    idx_pos = positives[torch.randint(0, positives.numel(), (pairs_per_sample,), device=device)]
+    idx_neg = negatives[torch.randint(0, negatives.numel(), (pairs_per_sample,), device=device)]
+    return F.softplus(-(scores[idx_pos] - scores[idx_neg])).mean()
